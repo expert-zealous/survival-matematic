@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #020617;
+  font-family:
+    ui-rounded,
+    "SF Pro Rounded",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Noto Sans",
+    sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 50% -10%, #1e1b4b 0%, #020617 60%);
+}
+
+.logo-text {
+  letter-spacing: -0.02em;
+  -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.35);
+}
+
+.game-logo {
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  color: #3b82f6;
+  -webkit-text-stroke: 1px #0f172a;
+  text-shadow:
+    0 2px 0 #1e3a8a,
+    0 4px 0 #1e3a8a,
+    2px 5px 0 #020617;
+}
+.game-logo span {
+  color: #fbbf24;
+  text-shadow:
+    0 2px 0 #9a3412,
+    0 4px 0 #9a3412,
+    2px 5px 0 #020617;
+}
+
+.btn-press {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@keyframes toast-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.toast-in {
+  animation: toast-in 0.25s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes sheet-in {
+  0% {
+    transform: translateY(100%);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+.sheet-in {
+  animation: sheet-in 0.3s cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+
+@keyframes intro-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.intro-pop {
+  animation: intro-pop 0.4s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes reward-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5) translateY(20px);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1.1) translateY(0);
+  }
+  25% {
+    transform: scale(1) translateY(0);
+  }
+  80% {
+    opacity: 1;
+    transform: scale(1) translateY(-10px);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9) translateY(-30px);
+  }
+}
+.reward-pop {
+  animation: reward-pop 1.8s ease-out both;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
