@@ -560,7 +560,7 @@ export class GameEngine {
     const g = Math.max(1, Math.round(BALANCE.gruntPower(L) * 0.7));
     const size = BALANCE.waveSize(L) * 2;
     const cx = rnd(0.2, 0.8);
-    for (let i = 0; i < size; i++) this.spawnEnemy(cx + rnd(-0.25, 0.25), 1 + rnd(0, 0.15), 0, g);
+    for (let i = 0; i < size; i++) this.spawnEnemy(clamp(cx + rnd(-0.16, 0.16), 0.08, 0.92), 1 + rnd(0, 0.15), 0, g);
     this.spawnEnemy(cx, 1.05, 2, g * 4);
     this.addFloat(0.5, 0.8, "GELOMBANG HUKUMAN!", "#f87171", 22);
   }
@@ -611,7 +611,7 @@ export class GameEngine {
     const size = Math.round(BALANCE.waveSize(L) * mult * (this.boss.enraged ? 1.5 : 1));
     // pasukan musuh keluar dari posisi bos (ikut maju), bukan dari langit-langit
     const originY = yBase ?? Math.min(1.04, this.boss.y + 0.04);
-    const cx = this.boss.hp > 0 ? Math.min(0.85, Math.max(0.15, this.boss.x + rnd(-0.2, 0.2))) : rnd(0.15, 0.85);
+    const cx = this.boss.hp > 0 ? Math.min(0.74, Math.max(0.26, this.boss.x + rnd(-0.12, 0.12))) : rnd(0.28, 0.72);
     const runnerChance = sp.includes("rush") ? 0.4 : 0.12;
     const bruteChance = sp.includes("elite") ? 0.22 : 0.09;
     const eliteChance = L >= 6 ? (sp.includes("elite") ? 0.08 : 0.03) : 0;
@@ -620,7 +620,7 @@ export class GameEngine {
     const g = Math.max(1, BALANCE.gruntPower(L) / comp);
     for (let i = 0; i < size; i++) {
       const r = Math.random();
-      const x = cx + rnd(-0.22, 0.22);
+      const x = clamp(cx + rnd(-0.16, 0.16), 0.08, 0.92);
       const y = originY + rnd(0, 0.12);
       if (r < eliteChance) this.spawnEnemy(x, y, 3, Math.round(g * 12));
       else if (r < eliteChance + bruteChance) this.spawnEnemy(x, y, 2, Math.round(g * 4));
@@ -1231,7 +1231,7 @@ export class GameEngine {
     const visIdx = isBoss ? bossIdx : (bossIdx + 3 + k * 3) % BOSSES.length === bossIdx ? (bossIdx + 1) % BOSSES.length : (bossIdx + 3 + k * 3) % BOSSES.length;
     // stage panjang: penjaga makin tangguh, bos jauh lebih tebal
     const bossMul = 1.15 + Math.min(1.05, (L - 1) * 0.22);
-    const hp = isBoss ? Math.round(bossHp * bossMul) : Math.round(bossHp * ((L <= 2 ? 0.35 : 0.45) + k * (L <= 2 ? 0.08 : 0.1)));
+    const hp = isBoss ? Math.round(bossHp * (bossMul * 1.55)) : Math.round(bossHp * (((L <= 2 ? 0.35 : 0.45) + k * (L <= 2 ? 0.08 : 0.1)) * 1.6));
     const baseSpeed = Math.min(0.035, 0.014 + L * 0.0009 + (tier - 1) * 0.003);
     return {
       def: BOSSES[visIdx],

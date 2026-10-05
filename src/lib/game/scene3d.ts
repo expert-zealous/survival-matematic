@@ -1150,13 +1150,13 @@ export class Scene3D {
     // ── HORDE MENGIKUTI BOS yang berjalan (bukan diam di ujung) ──
     const bossBp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
     const cols = 16;
-    const spanX = LANE_W + 2.8;
+    const spanX = LANE_W - 0.7;
     const rows = Math.max(1, Math.ceil(count / cols));
     for (let i = 0; i < count; i++) {
       const r = Math.floor(i / cols);
       const c = i % cols;
       const jitter = ((i * 13) % 10) / 10 - 0.5;
-      const x = -spanX / 2 + (c + 0.5) * (spanX / cols) + jitter * 0.22;
+      const x = Math.max(-(LANE_W / 2 - 0.35), Math.min(LANE_W / 2 - 0.35, -spanX / 2 + (c + 0.5) * (spanX / cols) + jitter * 0.12));
       const z = bossBp.z - 1.6 - r * (5.2 / rows) - Math.abs(jitter) * 0.15;
       const bob = Math.abs(Math.sin(f.time * (f.enraged ? 16 : 9) + i * 0.7)) * 0.04;
       this.dummy.position.set(x, bob, z);
