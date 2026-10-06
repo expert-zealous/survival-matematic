@@ -1,0 +1,19 @@
+# dependensi & hasil build
+node_modules/
+.next/
+out/
+.api-backup/
+*.tsbuildinfo
+next-env.d.ts
+
+# rahasia lokal (jangan di-commit)
+.env
+.env.*
+!.env.example
+
+# lain-lain
+.DS_Store
+Thumbs.db
+npm-debug.log*
+.netlify/
+.vercel/

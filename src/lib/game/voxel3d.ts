@@ -257,8 +257,10 @@ const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 export interface VoxelMeshOptions {
   /** tinggi dunia (satuan three) */
   height: number;
-  /** ketebalan maksimum badan relatif terhadap lebar (0.3–0.8) */
+  /** ketebalan maksimum badan relatif terhadap lebar (0.3–0.85), bawaan 0.55 */
   depth?: number;
+  /** batas lebar; bila siluet terlalu lebar, tinggi ikut diperkecil agar proporsi tetap */
+  maxWidth?: number;
 }
 
 function limbOf(c: VoxelCell): LimbName {
@@ -273,9 +275,13 @@ function limbOf(c: VoxelCell): LimbName {
  */
 export function buildVoxelGroup(data: VoxelData, opts: VoxelMeshOptions): THREE.Group {
   const root = new THREE.Group();
-  const { height } = opts;
-  const depthRatio = Math.min(0.85, Math.max(0.3, (opts.depth ?? 2.2) > 1.5 ? 0.55 : opts.depth ?? 0.55));
-  const width = height * data.aspect;
+  const depthRatio = Math.min(0.85, Math.max(0.3, opts.depth ?? 0.55));
+  let height = opts.height;
+  let width = height * data.aspect;
+  if (opts.maxWidth && width > opts.maxWidth) {
+    height *= opts.maxWidth / width;
+    width = opts.maxWidth;
+  }
   const voxel = height / data.rows;
   const maxThick = Math.max(voxel * 2, width * depthRatio);
   const pivots: Record<LimbName, THREE.Vector3> = {

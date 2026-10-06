@@ -523,13 +523,13 @@ export class GameEngine {
           }
           let cloned = 0;
           while (cloned < K - 1 && this.units.length < max) {
-            this.units.push({ ...u, x: clamp(u.x + rnd(-0.05, 0.05), 0.03, 0.97), y: u.y + rnd(-0.03, 0.03), vx: rnd(-0.1, 0.1), seed: Math.random() });
+            this.units.push({ ...u, x: clamp(u.x + rnd(-0.05, 0.05), 0.05, 0.95), y: u.y + rnd(-0.03, 0.03), vx: rnd(-0.1, 0.1), seed: Math.random() });
             cloned++;
           }
           u.power *= K - cloned;
         }
         const burst = 6 * K;
-        for (let i = 0; i < burst; i++) this.spawnUnit(this.cannonX + rnd(-0.12, 0.12), rnd(0, 0.06), w.power, 0);
+        for (let i = 0; i < burst; i++) this.spawnUnit(this.cannonX + rnd(-0.12, 0.12), rnd(0, 0.06), this.unitPower(w.power), 0);
         this.addFloat(0.5, 0.35, `PASUKAN ×${K}!`, "#c084fc", 26);
         break;
       }
@@ -560,12 +560,17 @@ export class GameEngine {
     const g = Math.max(1, Math.round(BALANCE.gruntPower(L) * 0.7));
     const size = BALANCE.waveSize(L) * 2;
     const cx = rnd(0.2, 0.8);
-    for (let i = 0; i < size; i++) this.spawnEnemy(clamp(cx + rnd(-0.16, 0.16), 0.08, 0.92), 1 + rnd(0, 0.15), 0, g);
+    for (let i = 0; i < size; i++) this.spawnEnemy(cx + rnd(-0.25, 0.25), 1 + rnd(0, 0.15), 0, g);
     this.spawnEnemy(cx, 1.05, 2, g * 4);
     this.addFloat(0.5, 0.8, "GELOMBANG HUKUMAN!", "#f87171", 22);
   }
 
   // ── spawning ─────────────────────────────────────────────────
+  /** Kekuatan satu peluru = kekuatan senjata × kombo jawaban benar berturut-turut. */
+  private unitPower(base: number) {
+    return Math.max(1, Math.round(base * BALANCE.comboMul(this.streak)));
+  }
+
   private spawnUnit(x: number, y: number, power: number, gated: number) {
     if (this.units.length >= BALANCE.maxPlayerUnits) {
       // stack power onto a random existing unit instead of exceeding the cap
@@ -574,10 +579,15 @@ export class GameEngine {
       return;
     }
     this.units.push({
-      x: clamp(x, 0.03, 0.97), y, vx: rnd(-0.08, 0.08), power, maxPower: power,
+      x: clamp(x, 0.05, 0.95), y, vx: rnd(-0.08, 0.08), power, maxPower: power,
       r: 0.025, speed: 0.26, giant: false, gated, seed: Math.random(), emoji: "", giantIndex: 0,
       attackT: 0, attackCd: 0, slamCd: 0, lunge: 0,
     });
+  }
+
+  /** Jarak aman dari tepi jalan (0..1) supaya badan & tangan musuh tidak menembus pagar. */
+  private edgeMargin(r: number) {
+    return r * 1.4 + 0.035;
   }
 
   private spawnEnemy(x: number, y: number, type: EType, power: number) {
@@ -594,8 +604,9 @@ export class GameEngine {
       { r: 0.04, speed: s * 0.65 },
       { r: 0.056, speed: s * 0.5 },
     ][type];
+    const m = this.edgeMargin(spec.r);
     this.enemies.push({
-      x: clamp(x, 0.04, 0.96), y, power, r: spec.r, speed: spec.speed, type, seed: Math.random(),
+      x: clamp(x, m, 1 - m), y, power, r: spec.r, speed: spec.speed, type, seed: Math.random(),
       attackT: 0, attackCd: rnd(0, 0.3), lunge: 0,
     });
   }
@@ -610,8 +621,9 @@ export class GameEngine {
     const sp = this.boss.def.specials;
     const size = Math.round(BALANCE.waveSize(L) * mult * (this.boss.enraged ? 1.5 : 1));
     // pasukan musuh keluar dari posisi bos (ikut maju), bukan dari langit-langit
-    const originY = yBase ?? Math.min(1.04, this.boss.y + 0.04);
-    const cx = this.boss.hp > 0 ? Math.min(0.74, Math.max(0.26, this.boss.x + rnd(-0.12, 0.12))) : rnd(0.28, 0.72);
+    // pengawal muncul di depan kaki monster (badan monster kini sangat besar)
+    const originY = yBase ?? Math.min(1.04, Math.max(0.14, this.boss.y - (0.03 + 0.07 * this.boss.scale)));
+    const cx = this.boss.hp > 0 ? Math.min(0.85, Math.max(0.15, this.boss.x + rnd(-0.2, 0.2))) : rnd(0.15, 0.85);
     const runnerChance = sp.includes("rush") ? 0.4 : 0.12;
     const bruteChance = sp.includes("elite") ? 0.22 : 0.09;
     const eliteChance = L >= 6 ? (sp.includes("elite") ? 0.08 : 0.03) : 0;
@@ -620,8 +632,8 @@ export class GameEngine {
     const g = Math.max(1, BALANCE.gruntPower(L) / comp);
     for (let i = 0; i < size; i++) {
       const r = Math.random();
-      const x = clamp(cx + rnd(-0.16, 0.16), 0.08, 0.92);
-      const y = originY + rnd(0, 0.12);
+      const x = cx + rnd(-0.22, 0.22);
+      const y = originY + rnd(0, 0.06);
       if (r < eliteChance) this.spawnEnemy(x, y, 3, Math.round(g * 12));
       else if (r < eliteChance + bruteChance) this.spawnEnemy(x, y, 2, Math.round(g * 4));
       else if (r < eliteChance + bruteChance + runnerChance) this.spawnEnemy(x, y, 1, Math.max(1, Math.round(g * 0.5)));
@@ -689,7 +701,7 @@ export class GameEngine {
       const n = w.barrels;
       for (let i = 0; i < n; i++) {
         const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * 0.04 * (n - 1);
-        this.spawnUnit(this.cannonX + off, 0.01, w.power, 0);
+        this.spawnUnit(this.cannonX + off, 0.01, this.unitPower(w.power), 0);
       }
       this.flash = 1;
       play("shoot");
@@ -747,7 +759,7 @@ export class GameEngine {
     if (!rooted) {
       const march = b.speed * (b.enraged ? 1.45 : 1) * wdt;
       b.y -= march;
-      b.walkPhase += wdt * (b.enraged ? 9 : 6);
+      b.walkPhase += wdt * (b.enraged ? 7 : 4.5); // monster raksasa melangkah lebih berat
       // goyang kiri-kanan seperti monster berjalan
       b.x = 0.5 + Math.sin(this.elapsed * 0.55) * 0.13;
       if (b.y < 0.1) b.y = 0.1; // mentok di garis benteng
@@ -763,7 +775,7 @@ export class GameEngine {
       const u = this.units[i];
       const dx = Math.abs(u.x - b.x);
       const dy = Math.abs(u.y - b.y);
-      if (dx < 0.09 && dy < 0.06) {
+      if (dx < 0.1 + 0.12 * b.scale && dy < 0.06 + 0.04 * b.scale) {
         const trample = Math.max(1, Math.round(BALANCE.gruntPower(this.level) * 0.8));
         if (u.giant) {
           u.power -= trample * 2;
@@ -906,9 +918,9 @@ export class GameEngine {
           e.power -= m;
           e.attackT = Math.max(e.attackT, 0.35);
           e.lunge = -1;
-          this.score += m;
           if (e.power <= 0) {
             this.stats.kills++;
+            this.score += BALANCE.killScore(e.type);
             this.burst(e.x, e.y, ENEMY_COLORS[e.type], e.type >= 2 ? 10 : 6);
           }
         }
@@ -941,8 +953,9 @@ export class GameEngine {
       u.y += u.speed * frost * slow * wdt;
       u.x += u.vx * wdt;
       u.vx *= 0.9;
-      if (u.x < u.r) { u.x = u.r; u.vx = Math.abs(u.vx); }
-      if (u.x > 1 - u.r) { u.x = 1 - u.r; u.vx = -Math.abs(u.vx); }
+      const lim = u.giant ? 0.15 : 0.05;
+      if (u.x < lim) { u.x = lim; u.vx = Math.abs(u.vx); }
+      if (u.x > 1 - lim) { u.x = 1 - lim; u.vx = -Math.abs(u.vx); }
       // gates
       for (let row = 0; row < 2; row++) {
         const bit = 1 << row;
@@ -959,7 +972,8 @@ export class GameEngine {
         }
       }
       // reach boss — bos kini BERJALAN, jadi tabrakan terjadi di badan bos
-      const bossFront = Math.max(0.06, this.boss.y - 0.015);
+      // badan monster raksasa tebal: kontak terjadi di KAKI-DEPANnya, bukan di pusat badan
+      const bossFront = Math.max(0.06, this.boss.y - (0.02 + 0.07 * this.boss.scale));
       if (u.y >= bossFront && this.boss.hp > 0) {
         // unit menabrak badan bos: menghantam lalu hilang
         u.attackT = Math.max(u.attackT, u.giant ? 0.5 : 0.32);
@@ -984,6 +998,8 @@ export class GameEngine {
       const slow = e.attackT > 0 ? 0.25 : 1;
       e.y -= e.speed * slow * wdt;
       e.x += Math.sin(this.elapsed * 2 + e.seed * 10) * 0.02 * wdt;
+      const em = this.edgeMargin(e.r);
+      e.x = clamp(e.x, em, 1 - em); // tak pernah keluar dari jalan
       if (e.y <= 0) {
         const dmg = Math.min(Math.round(this.maxHp * 0.5), Math.max(1, Math.round((e.power / BALANCE.gruntPower(this.level)) * (1.6 + this.level * 0.14))));
         this.hp -= dmg;
@@ -1013,14 +1029,13 @@ export class GameEngine {
       this.addFloat(u.x, u.y, g.kind === "mul" ? `×${g.value}` : `+${g.value}`, "#fde68a", 18);
       return;
     }
-    this.score += 1;
     if (g.kind === "add") {
-      for (let i = 0; i < g.value; i++) this.spawnUnit(u.x + rnd(-0.06, 0.06), u.y + rnd(-0.04, 0.02), w.power, u.gated);
+      for (let i = 0; i < g.value; i++) this.spawnUnit(u.x + rnd(-0.06, 0.06), u.y + rnd(-0.04, 0.02), this.unitPower(w.power), u.gated);
     } else {
       const K = g.value;
       let cloned = 0;
       while (cloned < K - 1 && this.units.length < BALANCE.maxPlayerUnits) {
-        this.units.push({ ...u, x: clamp(u.x + rnd(-0.06, 0.06), 0.03, 0.97), y: u.y + rnd(-0.04, 0.02), vx: rnd(-0.15, 0.15), seed: Math.random() });
+        this.units.push({ ...u, x: clamp(u.x + rnd(-0.06, 0.06), 0.05, 0.95), y: u.y + rnd(-0.04, 0.02), vx: rnd(-0.15, 0.15), seed: Math.random() });
         cloned++;
       }
       if (cloned < K - 1) u.power *= K - cloned;
@@ -1033,7 +1048,6 @@ export class GameEngine {
     if (b.hp <= 0) return;
     b.hp -= amount;
     b.hitFlash = 0.15;
-    this.score += amount;
     // efek di badan bos yang sedang berjalan
     const by = Math.max(0.08, b.y - 0.02);
     this.burst(x, by, b.def.glow, Math.min(10, 3 + Math.floor(amount / 5)));
@@ -1118,7 +1132,6 @@ export class GameEngine {
               const m = Math.min(u.power, e.power);
               u.power -= m;
               e.power -= m;
-              this.score += m;
               // efek pukul: partikel + suara (di-budget)
               if (smashBudget > 0 && (u.giant || e.type >= 2 || Math.random() < 0.25)) {
                 smashBudget--;
@@ -1135,6 +1148,7 @@ export class GameEngine {
               }
               if (e.power <= 0) {
                 this.stats.kills++;
+                this.score += BALANCE.killScore(e.type);
                 this.burst(e.x, e.y, ENEMY_COLORS[e.type], e.type >= 2 ? 10 : 4);
                 if (e.type >= 2) {
                   this.addFloat(e.x, e.y, "💥", "#fff", 18);
@@ -1226,12 +1240,10 @@ export class GameEngine {
     const tier = bossTierForLevel(L);
     const bossIdx = bossIndexForLevel(L);
     const isBoss = k >= this.stageTotal - 1;
-    const bossHp = BALANCE.bossHp(L);
     // penjaga memakai wujud monster lain (lebih kecil), makin lama makin kuat
     const visIdx = isBoss ? bossIdx : (bossIdx + 3 + k * 3) % BOSSES.length === bossIdx ? (bossIdx + 1) % BOSSES.length : (bossIdx + 3 + k * 3) % BOSSES.length;
     // stage panjang: penjaga makin tangguh, bos jauh lebih tebal
-    const bossMul = 1.15 + Math.min(1.05, (L - 1) * 0.22);
-    const hp = isBoss ? Math.round(bossHp * (bossMul * 1.55)) : Math.round(bossHp * (((L <= 2 ? 0.35 : 0.45) + k * (L <= 2 ? 0.08 : 0.1)) * 1.6));
+    const hp = isBoss ? BALANCE.bossHp(L) : BALANCE.guardHp(L, k);
     const baseSpeed = Math.min(0.035, 0.014 + L * 0.0009 + (tier - 1) * 0.003);
     return {
       def: BOSSES[visIdx],
@@ -1259,7 +1271,7 @@ export class GameEngine {
 
   private championDefeated() {
     const b = this.boss;
-    const bonus = Math.round(BALANCE.bossScore(this.level) * 0.25);
+    const bonus = BALANCE.guardScore(this.level, this.stageIndex);
     this.score += bonus;
     this.stats.kills += 1;
     const by = Math.max(0.1, b.y);

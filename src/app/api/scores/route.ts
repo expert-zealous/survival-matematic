@@ -6,8 +6,14 @@ export const dynamic = "force-dynamic";
 
 // GET /api/scores → top 10 (highest score first, ties → earliest achiever first)
 export async function GET() {
+  // Ranking utama dibaca langsung dari Firestore oleh browser. Tanpa
+  // PostgreSQL, endpoint mirror ini tetap valid dan mengembalikan data kosong.
+  if (!db) {
+    return Response.json({ ok: true, entries: [], source: "firestore-only" });
+  }
   try {
-    const rows = await db
+    const database = db;
+    const rows = await database
       .select({
         id: players.id,
         name: players.name,
@@ -53,7 +59,14 @@ export async function POST(req: Request) {
     const level = Math.max(1, Math.floor(Number(body.level) || 1));
     const rank = String(body.rank ?? "Perunggu").slice(0, 24);
 
-    await db.insert(gameSessions).values({
+    // Skor global sudah dikirim paralel ke Firestore dari client. Bila
+    // PostgreSQL tidak ada, anggap mirror dilewati—bukan sebuah kegagalan.
+    if (!db) {
+      return Response.json({ ok: true, improved: false, mirrored: false, source: "firestore-only" });
+    }
+    const database = db;
+
+    await database.insert(gameSessions).values({
       playerId,
       name,
       score,
@@ -63,10 +76,10 @@ export async function POST(req: Request) {
       durationSec: Math.max(0, Math.floor(Number(body.durationSec) || 0)),
     });
 
-    const existing = await db.select().from(players).where(eq(players.id, playerId)).limit(1);
+    const existing = await database.select().from(players).where(eq(players.id, playerId)).limit(1);
     let improved = false;
     if (existing.length === 0) {
-      await db.insert(players).values({ id: playerId, name, photo, bestScore: score, bestLevel: level, rank });
+      await database.insert(players).values({ id: playerId, name, photo, bestScore: score, bestLevel: level, rank });
       improved = true;
     } else if (score > existing[0].bestScore) {
       await db
@@ -75,7 +88,7 @@ export async function POST(req: Request) {
         .where(eq(players.id, playerId));
       improved = true;
     } else {
-      await db.update(players).set({ name, photo, rank, updatedAt: sql`now()` }).where(eq(players.id, playerId));
+      await database.update(players).set({ name, photo, rank, updatedAt: sql`now()` }).where(eq(players.id, playerId));
     }
     return Response.json({ ok: true, improved });
   } catch (e) {

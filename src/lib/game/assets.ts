@@ -14,7 +14,10 @@
 //  Daftar nama file resmi ada di bawah (ASSET_FILES).
 // ─────────────────────────────────────────────────────────────
 
-export const ASSET_BASE = "/assets";
+import { BASE_PATH } from "../base";
+
+// Ikut base path situs (mis. "/nama-repo/assets" di GitHub Pages).
+export const ASSET_BASE = `${BASE_PATH}/assets`;
 
 // ── PNG: boss (10) ────────────────────────────────────────────
 // boss_00..boss_09 — urutan sama dengan BOSSES di data.ts
@@ -129,7 +132,9 @@ export function assetExists(url: string): Promise<boolean> {
   let p = existsCache.get(url);
   if (!p) {
     p = fetch(url, { method: "HEAD" })
-      .then((r) => r.ok)
+      // Sebagian hosting membalas 200 + halaman HTML untuk file yang tidak ada;
+      // anggap itu "tidak ada" supaya game memakai aset bawaan.
+      .then((r) => r.ok && !(r.headers.get("content-type") ?? "").includes("text/html"))
       .catch(() => false);
     existsCache.set(url, p);
   }

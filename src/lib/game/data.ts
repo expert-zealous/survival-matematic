@@ -271,13 +271,13 @@ export interface RankDef {
 
 export const RANKS: RankDef[] = [
   { name: "Perunggu", min: 0, color: "#cd7f32", icon: "🥉", weapon: 1, hp: 100, startLevel: 1 },
-  { name: "Perak", min: 5000, color: "#c0c0c0", icon: "🥈", weapon: 3, hp: 110, startLevel: 4 },
-  { name: "Emas", min: 15000, color: "#ffd700", icon: "🥇", weapon: 6, hp: 120, startLevel: 7 },
-  { name: "Platinum", min: 40000, color: "#8fd3f4", icon: "💠", weapon: 8, hp: 135, startLevel: 10 },
-  { name: "Berlian", min: 120000, color: "#60a5fa", icon: "💎", weapon: 10, hp: 150, startLevel: 13 },
-  { name: "Master", min: 400000, color: "#a855f7", icon: "🔮", weapon: 13, hp: 170, startLevel: 16 },
-  { name: "Grandmaster", min: 900000, color: "#ef4444", icon: "👑", weapon: 15, hp: 190, startLevel: 19 },
-  { name: "Legenda", min: 1600000, color: "#f59e0b", icon: "🌟", weapon: 18, hp: 220, startLevel: 22 },
+  { name: "Perak", min: 3500, color: "#c0c0c0", icon: "🥈", weapon: 3, hp: 110, startLevel: 4 },
+  { name: "Emas", min: 13000, color: "#ffd700", icon: "🥇", weapon: 6, hp: 120, startLevel: 7 },
+  { name: "Platinum", min: 30000, color: "#8fd3f4", icon: "💠", weapon: 8, hp: 135, startLevel: 10 },
+  { name: "Berlian", min: 65000, color: "#60a5fa", icon: "💎", weapon: 10, hp: 150, startLevel: 13 },
+  { name: "Master", min: 120000, color: "#a855f7", icon: "🔮", weapon: 13, hp: 170, startLevel: 16 },
+  { name: "Grandmaster", min: 200000, color: "#ef4444", icon: "👑", weapon: 15, hp: 190, startLevel: 19 },
+  { name: "Legenda", min: 300000, color: "#f59e0b", icon: "🌟", weapon: 18, hp: 220, startLevel: 22 },
 ];
 
 export function getRankIndex(bestScore: number): number {
@@ -309,6 +309,12 @@ export function romanTier(t: number): string {
 }
 
 // ── Balance curve (all difficulty tuning lives here) ──────────
+// Kurva tekanan level tinggi (lihat BALANCE.lateMul). Level 1–23 TIDAK terpengaruh sama sekali;
+// setelah itu naik lurus. Hasil simulasi bot (bidik realistis, aktif bertanya): akurasi 70% mentok
+// ±level 29, akurasi 85% ±37, akurasi 97% + kombo panjang ±40. Pemain sungguhan mentok lebih awal.
+const LATE_START = 23;
+const LATE_SLOPE = 0.16;
+
 function rawDps(weaponLevel: number): number {
   const w = getWeapon(weaponLevel);
   return (w.power * w.barrels) / w.rate;
@@ -325,12 +331,41 @@ export const BALANCE = {
   expectedRaw(level: number): number {
     return rawDps(BALANCE.expectedWeapon(level));
   },
-  /** Boss HP ≈ 30 s of half the *effective* output (gates multiply the crowd ~×10 at the top). */
-  bossHp(level: number): number {
+  /**
+   * Tekanan tambahan di level tinggi (mulai level 24). Tanpa ini, pemain yang rajin menjawab
+   * benar membuat senjatanya tumbuh lebih cepat daripada HP monster → permainan tak ada ujungnya.
+   * Dengan ini ada "dinding" yang makin tinggi: akurasi tinggi + kombo panjang tetap bisa
+   * menembusnya, tetapi makin jauh makin sulit.
+   */
+  lateMul(level: number): number {
+    return 1 + Math.max(0, level - LATE_START) * LATE_SLOPE;
+  },
+  /** HP dasar level ini (patokan: keluaran meriam yang diharapkan dari pemain terampil). */
+  bossBaseHp(level: number): number {
     const boss = BOSSES[bossIndexForLevel(level)];
     const tier = bossTierForLevel(level);
     const identity = 0.6 + 0.4 * boss.hpMult; // 1.0 … 1.64
-    return Math.max(60, Math.round(BALANCE.expectedRaw(level) * 250 * identity * (1 + (tier - 1) * 0.15)));
+    return Math.max(60, Math.round(BALANCE.expectedRaw(level) * 220 * identity * (1 + (tier - 1) * 0.15) * BALANCE.lateMul(level)));
+  },
+  /** Pengali ketebalan bos: tebal sejak awal, tumbuh pelan lalu mendatar (tidak meledak di level tinggi). */
+  bossMul(level: number): number {
+    return 1.9 + Math.min(0.9, (level - 1) * 0.1);
+  },
+  /** HP TOTAL bos saat bertarung — dipakai engine, layar intro, dan galeri bos. */
+  bossHp(level: number): number {
+    return Math.round(BALANCE.bossBaseHp(level) * BALANCE.bossMul(level));
+  },
+  /** HP monster penjaga ke-k (0-based) sebelum bos. */
+  guardHp(level: number, k: number): number {
+    const early = level <= 2;
+    return Math.round(BALANCE.bossBaseHp(level) * ((early ? 0.52 : 0.66) + k * (early ? 0.1 : 0.14)));
+  },
+  /**
+   * KOMBO: tiap jawaban benar berturut-turut menaikkan kekuatan SEMUA pasukan (maks ×2).
+   * Inilah cara pemain yang cepat berhitung bisa menumbangkan monster tebal.
+   */
+  comboMul(streak: number): number {
+    return 1 + Math.min(Math.max(0, streak), 20) * 0.05;
   },
   /** Enemy pressure relative to raw output – grows forever (the endless wall ≈ level 50+). */
   pressureRatio(level: number): number {
@@ -338,7 +373,7 @@ export const BALANCE = {
   },
   /** Average power per enemy spawned (composition is normalised in the engine). */
   gruntPower(level: number): number {
-    const incoming = BALANCE.expectedRaw(level) * BALANCE.pressureRatio(level);
+    const incoming = BALANCE.expectedRaw(level) * BALANCE.pressureRatio(level) * Math.sqrt(BALANCE.lateMul(level));
     return Math.max(1, Math.round((incoming * BALANCE.spawnInterval(level)) / BALANCE.waveSize(level)));
   },
   spawnInterval(level: number): number {
@@ -361,14 +396,24 @@ export const BALANCE = {
   leakDamage(power: number): number {
     return Math.max(2, Math.round(power * 3));
   },
+  // ── SKOR ──────────────────────────────────────────────────
+  // Sengaja TIDAK dihitung dari jumlah damage (HP monster bisa jutaan). Skor datang dari
+  // pencapaian: jawaban benar, musuh dikalahkan, penjaga, bos, dan kecepatan → total
+  // permainan wajar ada di kisaran ribuan sampai ratusan ribu.
+  killScore(type: number): number {
+    return [1, 1, 3, 8][type] ?? 1;
+  },
   answerScore(level: number, streak: number): number {
-    return Math.round(40 * level * (1 + Math.min(streak, 12) * 0.2));
+    return Math.round((12 + 3 * level) * (1 + Math.min(streak, 15) * 0.08));
+  },
+  guardScore(level: number, k: number): number {
+    return 40 + 22 * level + 10 * k;
   },
   bossScore(level: number): number {
-    return 450 * level + 150 * bossTierForLevel(level);
+    return 250 + 90 * level + 60 * bossTierForLevel(level);
   },
   timeBonus(level: number, seconds: number): number {
-    return Math.max(0, Math.round((75 - seconds) * 4 * level));
+    return Math.max(0, Math.round((150 - seconds) * level * 0.6));
   },
   questionInterval(level: number): number {
     return Math.max(7, 12 - level * 0.1);

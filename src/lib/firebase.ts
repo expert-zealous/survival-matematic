@@ -29,6 +29,9 @@ const firebaseConfig = {
 };
 
 export const LEADERBOARD_COLLECTION = "leaderboard";
+// Peringkat memakai field `pts` (rumus skor v2). Dokumen lama (rumus damage, tanpa `pts`)
+// otomatis TIDAK ikut peringkat dan ditimpa saat pemainnya bermain lagi — tanpa index baru
+// dan tanpa mengubah Rules. Field `score` tetap ditulis agar Rules lama tetap lolos.
 
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
@@ -86,13 +89,14 @@ export async function submitScoreToFirestore(sub: ScoreSubmission): Promise<{ im
   return withTimeout(
     runTransaction(database, async (tx) => {
       const snap = await tx.get(ref);
-      const existing = snap.exists() ? (snap.data() as { score?: number }) : null;
-      const prevScore = existing?.score ?? -1;
+      const existing = snap.exists() ? (snap.data() as { pts?: number }) : null;
+      const prevScore = existing?.pts ?? -1; // dokumen lama tanpa `pts` dianggap belum punya rekor
       if (!snap.exists() || sub.score > prevScore) {
         tx.set(ref, {
           name: safeName,
           photo: sub.photo ?? null,
           score: sub.score,
+          pts: sub.score,
           level: sub.level,
           rank: sub.rank,
           achievedAt: serverTimestamp(),
@@ -112,13 +116,13 @@ export async function submitScoreToFirestore(sub: ScoreSubmission): Promise<{ im
 /** Top 10 global scores: highest first; equal scores → earliest achiever first. */
 export async function fetchTop10FromFirestore(): Promise<LeaderboardEntry[]> {
   const database = getDb();
-  const q = query(collection(database, LEADERBOARD_COLLECTION), orderBy("score", "desc"), limit(40));
+  const q = query(collection(database, LEADERBOARD_COLLECTION), orderBy("pts", "desc"), limit(40));
   const snap = await withTimeout(getDocs(q), 10000, "fetch");
   const rows: LeaderboardEntry[] = snap.docs.map((d) => {
     const data = d.data() as {
       name?: string;
       photo?: string | null;
-      score?: number;
+      pts?: number;
       level?: number;
       rank?: string;
       achievedAt?: Timestamp | null;
@@ -127,7 +131,7 @@ export async function fetchTop10FromFirestore(): Promise<LeaderboardEntry[]> {
       id: d.id,
       name: data.name ?? "Pemain",
       photo: data.photo ?? null,
-      score: data.score ?? 0,
+      score: data.pts ?? 0,
       level: data.level ?? 1,
       rank: data.rank ?? "Perunggu",
       achievedAt: data.achievedAt instanceof Timestamp ? data.achievedAt.toMillis() : Date.now(),

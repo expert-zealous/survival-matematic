@@ -15,6 +15,13 @@ import { buildVoxelGroup, disposeVoxelGroup, fetchVoxelData, poseVoxelGroup, typ
 
 const LANE_W = 6.4;
 const LANE_LEN = 20.5;
+// Jalan diperpanjang jauh melewati posisi awal monster supaya SEMUA musuh & horde
+// selalu berdiri di atas aspal (sebelumnya jalan berhenti di z≈-18).
+// Ukuran monster (pengali dari ukuran dasar). Bos menjulang jauh lebih tinggi dari pasukan.
+const MONSTER_SIZE = 2.2; // bos & penjaga
+const GIANT_SIZE = 1.6; // raksasa milik pemain
+const LANE_FRONT_Z = 10; // ujung dekat pemain
+const LANE_END_Z = -34; // ujung jauh (belakang horde)
 const Z0 = 5.6; // world z of game-y = 0 (player line)
 
 export function worldOf(x: number, y: number) {
@@ -688,9 +695,12 @@ export class Scene3D {
     this.sand = sand;
     this.scene.add(sand);
 
-    const road = new THREE.Mesh(new THREE.PlaneGeometry(LANE_W, LANE_LEN + 8), new THREE.MeshStandardMaterial({ map: roadTex(), roughness: 0.9, metalness: 0 }));
+    const roadLen = LANE_FRONT_Z - LANE_END_Z;
+    const roadTexture = roadTex();
+    roadTexture.repeat.set(1, roadLen / (LANE_LEN + 8)); // garis putus-putus tetap berukuran sama
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(LANE_W, roadLen), new THREE.MeshStandardMaterial({ map: roadTexture, roughness: 0.9, metalness: 0 }));
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0.01, Z0 - LANE_LEN / 2 + 0.4);
+    road.position.set(0, 0.01, (LANE_FRONT_Z + LANE_END_Z) / 2);
     road.receiveShadow = true;
     this.scene.add(road);
 
@@ -717,7 +727,7 @@ export class Scene3D {
     this.scene.add(this.shadowMesh);
 
     this.crowdShadow = new THREE.Mesh(
-      new THREE.PlaneGeometry(LANE_W + 3.4, 8),
+      new THREE.PlaneGeometry(LANE_W - 0.4, 9),
       new THREE.MeshBasicMaterial({ color: 0x3f0a0a, transparent: true, opacity: 0.22, depthWrite: false }),
     );
     this.crowdShadow.rotation.x = -Math.PI / 2;
@@ -742,7 +752,7 @@ export class Scene3D {
     this.slab.receiveShadow = true;
     this.scene.add(this.slab);
     this.bossBarMat = stdMat(0x22c55e, 0.1, 0.4, 0x16a34a, 0.3);
-    this.bossBar = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.1, 0.14), this.bossBarMat);
+    this.bossBar = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.2, 0.2), this.bossBarMat);
     this.bossBar.position.set(0, 0.32, -13.55);
     this.scene.add(this.bossBar);
 
@@ -854,11 +864,13 @@ export class Scene3D {
   }
 
   private buildFences() {
-    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.72, 0.12), this.fenceMat, 36);
+    const step = 1.35;
+    const postCount = Math.floor((8.2 - LANE_END_Z) / step) + 1;
+    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.72, 0.12), this.fenceMat, postCount * 2);
     const railMat = this.fenceMat;
     const dummy = new THREE.Object3D();
-    for (let i = 0; i < 18; i++) {
-      const z = 8.2 - i * 1.35;
+    for (let i = 0; i < postCount; i++) {
+      const z = 8.2 - i * step;
       for (const side of [-1, 1]) {
         dummy.position.set(side * (LANE_W / 2 + 0.15), 0.36, z);
         dummy.rotation.set(0, 0, 0);
@@ -869,8 +881,9 @@ export class Scene3D {
     }
     this.scene.add(posts);
     for (const side of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, LANE_LEN + 2), railMat);
-      rail.position.set(side * (LANE_W / 2 + 0.15), 0.62, Z0 - LANE_LEN / 2);
+      const railLen = 8.4 - LANE_END_Z;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, railLen), railMat);
+      rail.position.set(side * (LANE_W / 2 + 0.15), 0.62, (8.4 + LANE_END_Z) / 2);
       rail.castShadow = true;
       this.scene.add(rail);
     }
@@ -908,12 +921,12 @@ export class Scene3D {
     // enemy fortress behind the horde
     const red = stdMat(0xb91c1c, 0.12, 0.45, 0x7f1d1d, 0.3);
     const ewall = new THREE.Mesh(new THREE.BoxGeometry(LANE_W + 1.6, 1.1, 0.45), red);
-    ewall.position.set(0, 0.55, -19.6);
+    ewall.position.set(0, 0.55, LANE_END_Z + 2.4);
     ewall.castShadow = true;
     this.scene.add(ewall);
     for (const x of [-3.1, 3.1]) {
       const tower = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2.1, 0.9), red);
-      tower.position.set(x, 1.05, -19.7);
+      tower.position.set(x, 1.05, LANE_END_Z + 2.3);
       tower.castShadow = true;
       this.scene.add(tower);
     }
@@ -1121,7 +1134,7 @@ export class Scene3D {
     const list = f.enemies;
     const n = Math.min(list.length, MAX_ENEMIES);
     const tints = [0xef4444, 0xfb923c, 0xb91c1c, 0x7c3aed];
-    const scales = [0.56, 0.46, 0.78, 0.98];
+    const scales = [0.58, 0.48, 0.95, 1.3];
     let shadowBase = Math.min(f.units.filter((u) => !u.giant).length, MAX_MOBS);
     // recompute player shadows already written; continue from player count
     const playerN = Math.min(f.units.filter((u) => !u.giant).length, MAX_MOBS);
@@ -1149,15 +1162,17 @@ export class Scene3D {
     const count = f.bossHp <= 0 ? 0 : Math.floor(70 + (MAX_CROWD - 70) * ratio);
     // ── HORDE MENGIKUTI BOS yang berjalan (bukan diam di ujung) ──
     const bossBp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
-    const cols = 16;
-    const spanX = LANE_W - 0.7;
+    // Horde TIDAK boleh keluar dari aspal: lebar = lebar jalan dikurangi margin pagar.
+    const cols = 18;
+    const spanX = LANE_W - 1.1;
+    const depth = 6.5;
     const rows = Math.max(1, Math.ceil(count / cols));
     for (let i = 0; i < count; i++) {
       const r = Math.floor(i / cols);
       const c = i % cols;
       const jitter = ((i * 13) % 10) / 10 - 0.5;
-      const x = Math.max(-(LANE_W / 2 - 0.35), Math.min(LANE_W / 2 - 0.35, -spanX / 2 + (c + 0.5) * (spanX / cols) + jitter * 0.12));
-      const z = bossBp.z - 1.6 - r * (5.2 / rows) - Math.abs(jitter) * 0.15;
+      const x = THREE.MathUtils.clamp(-spanX / 2 + (c + 0.5) * (spanX / cols) + jitter * 0.18, -spanX / 2, spanX / 2);
+      const z = Math.max(LANE_END_Z + 0.6, bossBp.z - (1.2 + 2.2 * (f.champScale ?? 1)) - r * (depth / rows) - Math.abs(jitter) * 0.15);
       const bob = Math.abs(Math.sin(f.time * (f.enraged ? 16 : 9) + i * 0.7)) * 0.04;
       this.dummy.position.set(x, bob, z);
       this.dummy.rotation.set(0.12, Math.PI + jitter * 0.4, Math.sin(f.time * 8 + i) * 0.08);
@@ -1172,14 +1187,14 @@ export class Scene3D {
       this.crowdMesh.setColorAt(i, this.color);
     }
     this.finishCrowd(this.crowdMesh, this.crowdEyes, this.crowdPupils, count);
-    this.crowdShadow.position.set(bossBp.x, 0.015, bossBp.z - 3.4);
+    this.crowdShadow.position.set(0, 0.015, bossBp.z - (2.4 + 2.2 * (f.champScale ?? 1)) - 1);
     (this.crowdShadow.material as THREE.MeshBasicMaterial).opacity = 0.08 + ratio * 0.2;
     this.enemyGlow.intensity = 2 + ratio * 5 + (f.enraged ? 3 : 0);
   }
 
   /** Minta data voxel PNG (async, hasil disimpan di slot lalu dipakai frame berikut). */
   private requestVoxel(url: string, cb: (data: VoxelData | null) => void) {
-    void fetchVoxelData(url, 80).then(cb);
+    void fetchVoxelData(url, 96).then(cb);
   }
 
   private syncGiants(f: RenderFrame) {
@@ -1201,7 +1216,7 @@ export class Scene3D {
       this.requestVoxel(url, (data) => {
         slot.voxelData = data;
         if (data) {
-          const vg = buildVoxelGroup(data, { height: 2.6, depth: 2.2 });
+          const vg = buildVoxelGroup(data, { height: 2.6 * GIANT_SIZE, depth: 0.55, maxWidth: 5 });
           vg.visible = false;
           this.scene.add(vg);
           slot.voxel = vg;
@@ -1239,7 +1254,7 @@ export class Scene3D {
           this.requestVoxel(url, (data) => {
             slot.voxelData = data;
             if (data) {
-              const vg = buildVoxelGroup(data, { height: 2.6, depth: 2.2 });
+              const vg = buildVoxelGroup(data, { height: 2.6 * GIANT_SIZE, depth: 0.55, maxWidth: 5 });
               vg.visible = true;
               this.scene.add(vg);
               slot.voxel = vg;
@@ -1273,7 +1288,7 @@ export class Scene3D {
         slot.group.rotation.y = Math.sin(f.time * 2 + u.seed) * 0.08 + walkSway * 0.3;
         slot.group.rotation.x = windup * -0.18 + slam * 0.32;
         slot.group.rotation.z = walkSway * 0.4;
-        const baseS = 1.65;
+        const baseS = 1.65 * GIANT_SIZE;
         slot.group.scale.set(baseS * (1 + slam * 0.18), baseS * (1 - windup * 0.12 - slam * 0.22), baseS * (1 + slam * 0.18));
         for (const w of slot.wings) w.rotation.z = Math.sin(f.time * 7 + u.seed) * 0.45 * Math.sign(w.position.x || 1) + windup * 0.9;
         for (const ex of slot.extras) ex.rotation.x = Math.sin(f.time * 5 + ex.position.x) * 0.3 - windup * 1.4 + slam * 1.8;
@@ -1282,8 +1297,9 @@ export class Scene3D {
       const mat = slot.label.material as THREE.SpriteMaterial;
       mat.map = this.cachedText(text, "#fff");
       mat.opacity = 1;
-      slot.label.position.set(p.x, (hasVoxel ? 3.1 : 2.9) - crouch, p.z);
-      slot.label.scale.set(1.5 + punch * 0.3, 0.75 + punch * 0.15, 1);
+      const giantTop = (hasVoxel && slot.voxel ? Number(slot.voxel.userData.voxelHeight ?? 4) : 2.5 * GIANT_SIZE) + 0.7;
+      slot.label.position.set(p.x, giantTop - crouch, p.z);
+      slot.label.scale.set((1.5 + punch * 0.3) * 1.3, (0.75 + punch * 0.15) * 1.3, 1);
     }
   }
 
@@ -1359,7 +1375,7 @@ export class Scene3D {
         if (!data) return;
         // hanya pakai bila bos masih sama (hindari balapan antar level)
         if (this.bossVoxelIdx !== idx) return;
-        const vg = buildVoxelGroup(data, { height: 3.3, depth: 2.4 });
+        const vg = buildVoxelGroup(data, { height: 3.3 * MONSTER_SIZE, depth: 0.55, maxWidth: 9.5 });
         this.scene.add(vg);
         this.bossVoxel = vg;
       });
@@ -1386,6 +1402,13 @@ export class Scene3D {
     const crouch = windup * 0.3;
     const lungeZ = slam * 0.9; // menghantam ke arah pemain (+Z)
     const baseScale = Number(rig.group.userData.baseScale ?? 1);
+    // tinggi badan monster → tanda seru, bar HP, dan angka HP melayang tepat di atas kepala
+    const bodyH =
+      useVoxel && this.bossVoxel
+        ? Number(this.bossVoxel.userData.voxelHeight ?? 7) * tierScale * champScale
+        : 2.4 * baseScale * 1.45 * MONSTER_SIZE * tierScale * champScale;
+    const headY = bodyH + 0.9;
+    const labelK = 0.9 + 0.5 * champScale; // label bos lebih besar daripada label penjaga
     if (useVoxel && this.bossVoxel) {
       const v = this.bossVoxel;
       v.position.set(bp.x + roarShake, Math.max(0, walkBob * 0.6 + idleBob - crouch * 0.4), bp.z + lungeZ * 0.5);
@@ -1402,8 +1425,8 @@ export class Scene3D {
       );
       // model prosedural menghadap -Z (punggung ke kamera) → putar ke pemain
       rig.group.rotation.y = Math.PI + Math.sin(f.time * 1.2) * 0.05;
-      const sXZ = baseScale * 1.45 * tierScale * champScale * (1 + f.hitFlash * 0.05 + slam * 0.15 + (warning ? Math.sin(f.time * 20) * 0.02 : 0));
-      const sY = baseScale * 1.45 * tierScale * champScale * (1 - windup * 0.14 - slam * 0.2);
+      const sXZ = baseScale * 1.45 * MONSTER_SIZE * tierScale * champScale * (1 + f.hitFlash * 0.05 + slam * 0.15 + (warning ? Math.sin(f.time * 20) * 0.02 : 0));
+      const sY = baseScale * 1.45 * MONSTER_SIZE * tierScale * champScale * (1 - windup * 0.14 - slam * 0.2);
       rig.group.scale.set(sXZ, sY, sXZ);
       if (f.bossHp <= 0) rig.group.rotation.x = THREE.MathUtils.lerp(rig.group.rotation.x, 1.25, 0.08);
       else rig.group.rotation.x = THREE.MathUtils.lerp(rig.group.rotation.x, windup * -0.22 + slam * 0.4 + stepL * 0.04, 0.25);
@@ -1429,13 +1452,13 @@ export class Scene3D {
     this.bossWarn.visible = warning && f.bossHp > 0;
     if (warning) {
       const pulse = 1 + Math.sin(f.time * 18) * 0.15;
-      this.bossWarn.scale.set(1.1 * pulse, 1.1 * pulse, 1);
-      this.bossWarn.position.set(bp.x, 4.6 + Math.sin(f.time * 10) * 0.12, bp.z + 0.6);
+      this.bossWarn.scale.set(1.1 * labelK * pulse, 1.1 * labelK * pulse, 1);
+      this.bossWarn.position.set(bp.x, headY + 1.3 + Math.sin(f.time * 10) * 0.12, bp.z + 0.6);
     }
     this.bossRing.position.set(bp.x, 0.05, bp.z + 0.4);
     this.bossRingMat.opacity = warning ? 0.35 + Math.sin(f.time * 18) * 0.2 : slam > 0 ? slam * 0.5 : 0;
     if (warning || slam > 0) {
-      const rs = 2.2 + (warning ? Math.sin(f.time * 18) * 0.1 : slam * 0.8);
+      const rs = (2.2 + (warning ? Math.sin(f.time * 18) * 0.1 : slam * 0.8)) * (0.9 + 0.9 * champScale);
       this.bossRing.scale.set(rs, rs * 0.72, 1);
     }
     this.hitLight.position.set(bp.x, 1.8, bp.z + 0.8);
@@ -1444,11 +1467,8 @@ export class Scene3D {
     // ── TANPA PANGGUNG: bar HP + angka melayang di atas kepala bos ──
     this.slab.visible = false;
     const ratio = f.bossMax > 0 ? Math.max(0, f.bossHp) / f.bossMax : 0;
-    const barW = 3.1;
-    this.bossBar.scale.x = Math.max(0.04, ratio);
-    this.bossBar.scale.y = 1;
-    this.bossBar.scale.z = 1;
-    const headY = 4.05 * Math.max(0.7, champScale);
+    const barW = 3.1 * labelK;
+    this.bossBar.scale.set(Math.max(0.04, ratio) * labelK, labelK, labelK);
     this.bossBar.position.set(bp.x + (ratio - 1) * (barW / 2), headY, bp.z + 0.4);
     this.bossBar.rotation.set(0, 0, 0);
     this.bossBarMat.color.set(ratio > 0.5 ? 0x22c55e : ratio > 0.25 ? 0xf59e0b : 0xef4444);
@@ -1474,9 +1494,9 @@ export class Scene3D {
       }
     }
     const punch = 1 + f.hitFlash * 0.08;
-    const bw = Math.min(3.2, Math.max(2, text.length * 0.46)) * punch;
+    const bw = Math.min(3.2, Math.max(2, text.length * 0.46)) * punch * labelK;
     this.bossSprite.scale.set(bw, bw * 0.46, 1);
-    this.bossSprite.position.set(bp.x, headY - 0.7, bp.z + 0.4);
+    this.bossSprite.position.set(bp.x, headY - 0.7 * labelK, bp.z + 0.4);
     this.bossSprite.visible = f.bossHp > 0;
     this.bossBar.visible = f.bossHp > 0;
   }

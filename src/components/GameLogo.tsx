@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { LOGO_URL, MENU_BG_URL, assetExists } from "@/lib/game/assets";
+import { withBase } from "@/lib/base";
 
 /** Logo game: pakai public/assets/logo.png kalau ada, kalau tidak pakai teks. */
 export function GameLogo({ compact = false }: { compact?: boolean }) {
@@ -41,7 +42,7 @@ export function MenuBackground() {
   return (
     <div
       className="absolute inset-0 bg-cover bg-center"
-      style={{ backgroundImage: `url('${custom ? MENU_BG_URL : "/images/menu-bg.jpg"}')` }}
+      style={{ backgroundImage: `url('${custom ? MENU_BG_URL : withBase("/images/menu-bg.jpg")}')` }}
     />
   );
 }

@@ -18,7 +18,12 @@ export interface SaveData {
   sound: boolean;
   tutorialSeen: boolean;
   lastSyncedScore: number;
+  /** Versi rumus skor. Rumus berubah → skor lama tidak sebanding, jadi di-reset sekali. */
+  scoreVersion: number;
 }
+
+/** 2 = skor berbasis pencapaian (ribuan–ratusan ribu); 1 = skor lama berbasis damage (jutaan). */
+export const SCORE_VERSION = 2;
 
 const PROFILE_KEY = "sm_profile_v1";
 const SAVE_KEY = "sm_save_v1";
@@ -59,13 +64,25 @@ export const DEFAULT_SAVE: SaveData = {
   sound: true,
   tutorialSeen: false,
   lastSyncedScore: 0,
+  scoreVersion: SCORE_VERSION,
 };
 
 export function loadSave(): SaveData {
   if (!isBrowser()) return { ...DEFAULT_SAVE };
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) return { ...DEFAULT_SAVE, ...(JSON.parse(raw) as Partial<SaveData>) };
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SaveData>;
+      const merged: SaveData = { ...DEFAULT_SAVE, ...parsed };
+      if ((parsed.scoreVersion ?? 1) < SCORE_VERSION) {
+        // rumus skor baru: rekor & rank lama dihitung ulang dari nol (level tertinggi tetap disimpan)
+        merged.bestScore = 0;
+        merged.lastSyncedScore = 0;
+        merged.scoreVersion = SCORE_VERSION;
+        localStorage.setItem(SAVE_KEY, JSON.stringify(merged));
+      }
+      return merged;
+    }
   } catch {}
   return { ...DEFAULT_SAVE };
 }

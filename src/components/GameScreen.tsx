@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GameEngine, type GameSummary, type HudState } from "@/lib/game/engine";
-import { getRank, romanTier } from "@/lib/game/data";
+import { BALANCE, getRank, romanTier } from "@/lib/game/data";
 import { TIER_LABEL, tierForLevel } from "@/lib/game/math";
 import { formatScore, updateSave, type Profile, type SaveData } from "@/lib/storage";
 import { submitScore, type SubmitResult } from "@/lib/leaderboard";
@@ -267,11 +267,15 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
       )}
       {hud && hud.phase === "play" && !q && !hud.paused && (
         <div className="pointer-events-none absolute bottom-[max(env(safe-area-inset-bottom),14px)] left-3 flex flex-col gap-1">
-          <div className="w-28 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
-            <div className="flex items-center justify-between text-[10px] font-black text-white">
+          <div className="w-36 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
+            <div className="flex items-center justify-between gap-1 text-[10px] font-black text-white">
               <span>🏰 {hud.hp}</span>
               <span style={{ color: hud.weapon.color }}>{hud.weapon.emoji} {hud.weapon.level}</span>
-              {hud.streak > 0 && <span>🔥{hud.streak}</span>}
+              {hud.streak > 0 && (
+                <span className="rounded-full bg-orange-500 px-1.5 text-[10px] text-white">
+                  🔥{hud.streak} ×{BALANCE.comboMul(hud.streak).toFixed(2).replace(/0$/, "")}
+                </span>
+              )}
             </div>
             <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-white/20">
               <div className="h-full rounded-full" style={{ width: `${hpRatio * 100}%`, background: hpRatio > 0.5 ? "#22c55e" : hpRatio > 0.25 ? "#f59e0b" : "#ef4444" }} />
@@ -424,7 +428,7 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
               <li className="flex gap-3">
                 <span className="text-2xl">🧮</span>
                 <span>
-                  <b>Jawab soal matematika</b> dengan benar untuk mendapat <b>senjata baru</b>, <b>pasukan berlipat</b>, atau <b>monster raksasa penghantam</b>. Salah = gelombang hukuman!
+                  <b>Jawab soal matematika</b> dengan benar untuk mendapat <b>senjata baru</b>, <b>pasukan berlipat</b>, atau <b>monster raksasa penghantam</b>. Jawab benar <b>berturut-turut = KOMBO</b>: kekuatan semua pasukan naik sampai <b>×2</b>. Salah = kombo putus + gelombang hukuman!
                 </span>
               </li>
               <li className="flex gap-3">
