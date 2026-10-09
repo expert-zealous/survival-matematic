@@ -203,12 +203,12 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
                 Lv.{hud.level} · {hud.mapName}
                 {hud.boss.enraged ? " · MENGAMUK" : ""}
               </div>
-              {/* progres stage: penjaga → bos */}
+              {/* progres stage: bos 1 → … → bos akhir */}
               <div className="mt-1 flex w-fit items-center gap-1 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
                 {Array.from({ length: hud.stage.total }).map((_, i) => {
                   const last = i === hud.stage.total - 1;
-                  const done = i < hud.stage.index || (i === hud.stage.index && hud.stage.incoming > 0);
-                  const active = i === hud.stage.index && hud.stage.incoming <= 0;
+                  const done = i < hud.stage.index;
+                  const active = i === hud.stage.index && hud.stage.mode === "champion";
                   return (
                     <span
                       key={i}
@@ -220,6 +220,15 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
                     </span>
                   );
                 })}
+              </div>
+              {/* status fase: gelombang pasukan / bos / habisi sisa pasukan */}
+              <div className="mt-1 w-fit rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-black text-white backdrop-blur">
+                {hud.stage.mode === "wave" &&
+                  (hud.stage.index >= hud.stage.total - 1
+                    ? `⚔️ Gelombang pasukan · BOS AKHIR datang ${Math.ceil(hud.stage.incoming)} dtk`
+                    : `⚔️ Gelombang pasukan · Bos ${hud.stage.index + 1} datang ${Math.ceil(hud.stage.incoming)} dtk`)}
+                {hud.stage.mode === "champion" && (hud.stage.isBoss ? "👑 BOS AKHIR + pasukannya!" : `👾 Bos ${hud.stage.index + 1}/${hud.stage.total} + pasukannya!`)}
+                {hud.stage.mode === "mopup" && `🧹 Habisi sisa pasukan: ${hud.stage.enemiesLeft}`}
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -299,7 +308,7 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
             <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-red-500 transition-[width] duration-100 ease-linear" style={{ width: `${(q.timeLeft / q.timeLimit) * 100}%` }} />
           </div>
           <div className="mt-2 text-center">
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{TIER_LABEL[q.question.tier] ?? TIER_LABEL[tierForLevel(hud!.level)]}</div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{TIER_LABEL[q.question.tier] ?? TIER_LABEL[0]}</div>
             <div className="mt-1 text-5xl font-black tracking-wide text-slate-900 tabular-nums drop-shadow-sm">
               {q.question.text} <span className="text-fuchsia-600">= ?</span>
             </div>
@@ -346,19 +355,20 @@ export default function GameScreen({ profile, save, startLevel, onExit, onSaveCh
             <div className="text-xs font-bold uppercase tracking-[0.3em] text-sky-300">Level {hud.level}</div>
             <div className="text-2xl font-black text-white">{hud.mapName}</div>
             <div className="mt-3 flex items-center justify-center gap-1 text-xl">
+              <span className="text-base">⚔️</span>
               {Array.from({ length: hud.stage.total - 1 }).map((_, i) => (
                 <span key={i}>👾</span>
               ))}
               <span className="text-white/50">→</span>
               <span className="text-5xl drop-shadow-[0_0_20px_rgba(255,255,255,.5)]">{hud.stage.bossEmoji}</span>
             </div>
-            <div className="mt-1 text-[11px] font-bold text-amber-300">Kalahkan {hud.stage.total - 1} monster penjaga, lalu hadapi bos!</div>
+            <div className="mt-1 text-[11px] font-bold text-amber-300">Tahan gelombang pasukan, kalahkan {hud.stage.total - 1} bos beserta pasukannya, lalu bos akhir. Stage selesai bila SEMUA lawan habis!</div>
             <div className="mt-1 text-lg font-black" style={{ color: hud.stage.bossColor }}>
               {hud.stage.bossName} <span className="text-white/60">· Tingkat {romanTier(hud.boss.tier)}</span>
             </div>
             <div className="text-xs text-slate-300">{hud.stage.bossTitle} · HP {formatScore(hud.stage.bossMaxHp)}</div>
             <div className="mt-2 text-[11px] text-slate-400">{hud.stage.bossDesc}</div>
-            <div className="mt-3 text-[11px] font-bold text-fuchsia-300">Soal: {TIER_LABEL[tierForLevel(hud.level)]}</div>
+            <div className="mt-3 text-[11px] font-bold text-fuchsia-300">Soal: {TIER_LABEL[tierForLevel(hud.level)]} · tidak makin sulit</div>
             <div className="mt-2 animate-pulse text-xs text-white/60">Sentuh layar untuk mulai</div>
           </div>
         </div>

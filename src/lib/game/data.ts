@@ -275,9 +275,9 @@ export const RANKS: RankDef[] = [
   { name: "Emas", min: 13000, color: "#ffd700", icon: "🥇", weapon: 6, hp: 120, startLevel: 7 },
   { name: "Platinum", min: 30000, color: "#8fd3f4", icon: "💠", weapon: 8, hp: 135, startLevel: 10 },
   { name: "Berlian", min: 65000, color: "#60a5fa", icon: "💎", weapon: 10, hp: 150, startLevel: 13 },
-  { name: "Master", min: 120000, color: "#a855f7", icon: "🔮", weapon: 13, hp: 170, startLevel: 16 },
-  { name: "Grandmaster", min: 200000, color: "#ef4444", icon: "👑", weapon: 15, hp: 190, startLevel: 19 },
-  { name: "Legenda", min: 300000, color: "#f59e0b", icon: "🌟", weapon: 18, hp: 220, startLevel: 22 },
+  { name: "Master", min: 150000, color: "#a855f7", icon: "🔮", weapon: 13, hp: 170, startLevel: 16 },
+  { name: "Grandmaster", min: 260000, color: "#ef4444", icon: "👑", weapon: 15, hp: 190, startLevel: 19 },
+  { name: "Legenda", min: 400000, color: "#f59e0b", icon: "🌟", weapon: 18, hp: 220, startLevel: 22 },
 ];
 
 export function getRankIndex(bestScore: number): number {
@@ -309,84 +309,135 @@ export function romanTier(t: number): string {
 }
 
 // ── Balance curve (all difficulty tuning lives here) ──────────
-// Kurva tekanan level tinggi (lihat BALANCE.lateMul). Level 1–23 TIDAK terpengaruh sama sekali;
-// setelah itu naik lurus. Hasil simulasi bot (bidik realistis, aktif bertanya): akurasi 70% mentok
-// ±level 29, akurasi 85% ±37, akurasi 97% + kombo panjang ±40. Pemain sungguhan mentok lebih awal.
-const LATE_START = 23;
-const LATE_SLOPE = 0.16;
+//
+//  FILOSOFI (revisi keseimbangan):
+//   1. Tiap stage = GELOMBANG PASUKAN panjang → BOS 1 + pasukan besar di belakangnya →
+//      gelombang lagi → BOS 2 + pasukan → … → BOS AKHIR + pasukan. Stage baru selesai
+//      setelah SEMUA lawan habis.
+//   2. Durasi stage dikendalikan WAKTU (lama gelombang & lama duel bos), bukan HP yang
+//      meledak, sehingga makin tinggi level → makin panjang & seru, TANPA dinding mendadak.
+//   3. Kekuatan lawan MENYESUAIKAN kekuatan pemain (adaptif), jadi tidak ada level yang
+//      tiba-tiba mustahil; pemain yang rajin menjawab benar tetap unggul (kombo, raksasa,
+//      pasukan berlipat).
+
+/** Angka penyetel — diekspor agar bisa dikalibrasi lewat simulasi. */
+export const TUNE = {
+  /** damage efektif per 1 "raw dps" meriam (gerbang pengali + kerumunan) ≈ hasil ukur simulasi */
+  effMul: 30,
+  /** porsi senjata PEMAIN dalam level referensi lawan (sisanya level ideal) */
+  adaptive: 0.9,
+  /** pengali umum durasi duel bos */
+  fightScale: 1,
+  /** pengali tekanan pasukan */
+  pressureScale: 2.5,
+};
 
 function rawDps(weaponLevel: number): number {
-  const w = getWeapon(weaponLevel);
+  const w = getWeapon(Math.max(1, Math.round(weaponLevel)));
   return (w.power * w.barrels) / w.rate;
+}
+function expectedWeaponOf(level: number): number {
+  return 1 + Math.round(level * 0.8);
+}
+function expectedRawOf(level: number): number {
+  return rawDps(expectedWeaponOf(level));
 }
 
 export const BALANCE = {
-  /** Weapon level a skilled player is expected to have at this level (~0.8 upgrade per level). */
+  /** Level senjata pemain "ideal" pada level ini. */
   expectedWeapon(level: number): number {
-    return 1 + Math.round(level * 0.8);
+    return expectedWeaponOf(level);
   },
-  /** Raw cannon output per second for a weapon level (before gate multiplication). */
+  /** Keluaran mentah meriam per detik untuk level senjata tertentu. */
   rawDps,
-  /** Expected raw output at this level for a skilled player. */
+  /** Keluaran mentah yang diharapkan pada level ini. */
   expectedRaw(level: number): number {
-    return rawDps(BALANCE.expectedWeapon(level));
+    return expectedRawOf(level);
   },
   /**
-   * Tekanan tambahan di level tinggi (mulai level 24). Tanpa ini, pemain yang rajin menjawab
-   * benar membuat senjatanya tumbuh lebih cepat daripada HP monster → permainan tak ada ujungnya.
-   * Dengan ini ada "dinding" yang makin tinggi: akurasi tinggi + kombo panjang tetap bisa
-   * menembusnya, tetapi makin jauh makin sulit.
+   * Keluaran REFERENSI yang dipakai untuk mengukur kekuatan lawan. Bila senjata pemain
+   * diketahui, referensi = campuran senjata ideal & senjata pemain → adaptif, tanpa dinding.
    */
-  lateMul(level: number): number {
-    return 1 + Math.max(0, level - LATE_START) * LATE_SLOPE;
+  refRaw(level: number, weaponLevel?: number): number {
+    if (weaponLevel === undefined) return BALANCE.expectedRaw(level);
+    const e = BALANCE.expectedWeapon(level);
+    return rawDps((1 - TUNE.adaptive) * e + TUNE.adaptive * weaponLevel);
   },
-  /** HP dasar level ini (patokan: keluaran meriam yang diharapkan dari pemain terampil). */
-  bossBaseHp(level: number): number {
+
+  // ── STRUKTUR STAGE ─────────────────────────────────────────
+  /** Jumlah bos per stage (termasuk bos akhir): 2 di awal, bertambah tiap 4 level, maks 7. */
+  bossCount(level: number): number {
+    return Math.min(7, 2 + Math.floor((level - 1) / 4));
+  },
+  /** Lama gelombang pembuka sebelum bos pertama (detik). */
+  openingWave(level: number): number {
+    return Math.min(45, 18 + level * 0.8);
+  },
+  /** Lama gelombang di antara dua bos (detik). */
+  betweenWave(level: number): number {
+    return Math.min(30, 10 + level * 0.5);
+  },
+  /** Target lama duel melawan bos ke-k (detik, untuk pemain dengan senjata ideal). */
+  fightSeconds(level: number, k: number, count: number): number {
+    const final = k >= count - 1;
+    const t = final ? Math.min(75, 30 + (level - 1) * 0.8) : Math.min(40, 14 + k * 1.5 + level * 0.3);
+    return t * TUNE.fightScale;
+  },
+  /** HP bos ke-k. `raw` = keluaran referensi (lihat refRaw). */
+  champHp(level: number, k: number, count: number, raw: number = expectedRawOf(level)): number {
+    const final = k >= count - 1;
     const boss = BOSSES[bossIndexForLevel(level)];
-    const tier = bossTierForLevel(level);
-    const identity = 0.6 + 0.4 * boss.hpMult; // 1.0 … 1.64
-    return Math.max(60, Math.round(BALANCE.expectedRaw(level) * 220 * identity * (1 + (tier - 1) * 0.15) * BALANCE.lateMul(level)));
+    const identity = final ? 0.8 + 0.2 * boss.hpMult : 1; // tiap bos akhir punya ketebalan khas
+    const tier = 1 + (bossTierForLevel(level) - 1) * 0.08;
+    const rookie = [0.55, 0.65, 0.75, 0.85, 0.93][level - 1] ?? 1; // masa belajar level 1–5
+    return Math.max(80, Math.round(raw * TUNE.effMul * BALANCE.fightSeconds(level, k, count) * identity * tier * rookie));
   },
-  /** Pengali ketebalan bos: tebal sejak awal, tumbuh pelan lalu mendatar (tidak meledak di level tinggi). */
-  bossMul(level: number): number {
-    return 1.9 + Math.min(0.9, (level - 1) * 0.1);
-  },
-  /** HP TOTAL bos saat bertarung — dipakai engine, layar intro, dan galeri bos. */
+  /** HP bos akhir dengan senjata ideal (ditampilkan di layar intro & galeri bos). */
   bossHp(level: number): number {
-    return Math.round(BALANCE.bossBaseHp(level) * BALANCE.bossMul(level));
+    const n = BALANCE.bossCount(level);
+    return BALANCE.champHp(level, n - 1, n);
   },
-  /** HP monster penjaga ke-k (0-based) sebelum bos. */
-  guardHp(level: number, k: number): number {
-    const early = level <= 2;
-    return Math.round(BALANCE.bossBaseHp(level) * ((early ? 0.52 : 0.66) + k * (early ? 0.1 : 0.14)));
+  /** Perkiraan lama stage (detik) untuk pemain dengan senjata ideal. */
+  parSeconds(level: number): number {
+    const n = BALANCE.bossCount(level);
+    let t = BALANCE.openingWave(level) + (n - 1) * BALANCE.betweenWave(level) + 6;
+    for (let k = 0; k < n; k++) t += BALANCE.fightSeconds(level, k, n);
+    return t;
   },
+
   /**
    * KOMBO: tiap jawaban benar berturut-turut menaikkan kekuatan SEMUA pasukan (maks ×2).
-   * Inilah cara pemain yang cepat berhitung bisa menumbangkan monster tebal.
+   * Inilah cara pemain yang cepat berhitung bisa menumbangkan bos tebal.
    */
   comboMul(streak: number): number {
     return 1 + Math.min(Math.max(0, streak), 20) * 0.05;
   },
-  /** Enemy pressure relative to raw output – grows forever (the endless wall ≈ level 50+). */
+
+  // ── PASUKAN LAWAN ──────────────────────────────────────────
+  /** Tekanan pasukan relatif terhadap keluaran pemain — naik pelan, lalu mendatar. */
   pressureRatio(level: number): number {
-    return 0.4 + level * 0.012;
+    return Math.min(1.25, 0.42 + level * 0.018) * TUNE.pressureScale;
   },
-  /** Average power per enemy spawned (composition is normalised in the engine). */
-  gruntPower(level: number): number {
-    const incoming = BALANCE.expectedRaw(level) * BALANCE.pressureRatio(level) * Math.sqrt(BALANCE.lateMul(level));
+  /** Anggaran total kekuatan satu gelombang (sebanding dengan kekuatan pemain). */
+  waveBudget(level: number, raw: number = expectedRawOf(level)): number {
+    return raw * BALANCE.pressureRatio(level) * BALANCE.spawnInterval(level);
+  },
+  /** Kekuatan rata-rata satu prajurit lawan. */
+  gruntPower(level: number, raw: number = expectedRawOf(level)): number {
+    const incoming = raw * BALANCE.pressureRatio(level);
     return Math.max(1, Math.round((incoming * BALANCE.spawnInterval(level)) / BALANCE.waveSize(level)));
   },
   spawnInterval(level: number): number {
-    return Math.max(0.5, 1.5 - level * 0.04);
+    return Math.max(0.6, 1.5 - level * 0.03);
   },
+  /** Banyak prajurit per gelombang — banyak & kecil supaya jalan terasa PENUH. */
   waveSize(level: number): number {
-    return Math.min(12, 2 + Math.floor(level / 3));
+    return Math.min(26, 9 + Math.floor(level / 2));
   },
   enemySpeed(level: number): number {
     return Math.min(0.2, 0.1 + level * 0.003);
   },
   giantPower(level: number, weaponLevel: number, streak: number): number {
-    // ≈ 20 % of a boss at matching gear; scales with the player's actual weapon
     const gear = Math.max(rawDps(weaponLevel), BALANCE.expectedRaw(level) * 0.5);
     return Math.max(10, Math.round(gear * 40 * (1 + Math.min(streak, 10) * 0.08)));
   },
@@ -396,27 +447,30 @@ export const BALANCE = {
   leakDamage(power: number): number {
     return Math.max(2, Math.round(power * 3));
   },
+
   // ── SKOR ──────────────────────────────────────────────────
-  // Sengaja TIDAK dihitung dari jumlah damage (HP monster bisa jutaan). Skor datang dari
-  // pencapaian: jawaban benar, musuh dikalahkan, penjaga, bos, dan kecepatan → total
-  // permainan wajar ada di kisaran ribuan sampai ratusan ribu.
+  // Dari pencapaian (bukan damage): jawaban benar, musuh, bos, kecepatan.
   killScore(type: number): number {
     return [1, 1, 3, 8][type] ?? 1;
   },
   answerScore(level: number, streak: number): number {
-    return Math.round((12 + 3 * level) * (1 + Math.min(streak, 15) * 0.08));
+    return Math.round((10 + 2 * level) * (1 + Math.min(streak, 15) * 0.08));
   },
+  /** Bonus bos ke-k (bukan bos akhir). */
   guardScore(level: number, k: number): number {
-    return 40 + 22 * level + 10 * k;
+    return 40 + 15 * level + 15 * k;
   },
+  /** Bonus bos akhir. */
   bossScore(level: number): number {
-    return 250 + 90 * level + 60 * bossTierForLevel(level);
+    return 200 + 60 * level + 50 * bossTierForLevel(level);
   },
+  /** Bonus waktu: selesai lebih cepat dari perkiraan → bonus. */
   timeBonus(level: number, seconds: number): number {
-    return Math.max(0, Math.round((150 - seconds) * level * 0.6));
+    return Math.max(0, Math.round((BALANCE.parSeconds(level) * 1.25 - seconds) * (1 + level * 0.15)));
   },
-  questionInterval(level: number): number {
-    return Math.max(7, 12 - level * 0.1);
+  /** Soal otomatis muncul tiap 8 detik di semua level (selain tombol 🧮). */
+  questionInterval(_level: number): number {
+    return 8;
   },
   manualCooldown: 4,
   maxPlayerUnits: 420,

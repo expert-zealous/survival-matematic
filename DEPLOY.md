@@ -316,9 +316,9 @@ kecepatan), jadi permainan normal berkisar **ribuan sampai ratusan ribu**:
 | 🥇 Emas | 13.000 | 8 |
 | 💠 Platinum | 30.000 | 12 |
 | 💎 Berlian | 65.000 | 18 |
-| 🔮 Master | 120.000 | 24 |
-| 👑 Grandmaster | 200.000 | 32 |
-| 🌟 Legenda | 300.000 | 37 |
+| 🔮 Master | 150.000 | ±18 |
+| 👑 Grandmaster | 260.000 | ±23 |
+| 🌟 Legenda | 400.000 | ±28 |
 
 Akibatnya setelah update ini:
 
@@ -330,3 +330,16 @@ Akibatnya setelah update ini:
   Firebase Console (opsional).
 - Mirror PostgreSQL (mode server) menyimpan skor lama; kosongkan tabel `players` bila dipakai:
   `TRUNCATE players, game_sessions;`
+
+
+---
+
+## 10. Keseimbangan baru: stage panjang bergelombang
+
+- Tiap stage: **gelombang pasukan pembuka → Bos 1 + pasukan di belakangnya → gelombang → Bos 2 + pasukan → … → BOS AKHIR + pasukan**. Stage baru selesai setelah **semua lawan habis**.
+- Jumlah bos per stage: 2 (level 1–4), lalu bertambah 1 tiap 4 level sampai maksimal 7.
+- Durasi stage memanjang seiring level (±1 menit di level 1 hingga ±3–5 menit di level tinggi).
+- Bos berhenti di garis depan lalu bertarung di sana. Ancaman ke benteng berasal dari pasukan yang lolos, dan alirannya makin deras bila duel berlangsung lama.
+- Kekuatan lawan **menyesuaikan senjata pemain**, jadi tidak ada level yang tiba-tiba mustahil.
+- **Soal tidak dipengaruhi level**: hanya mudah & sedang, semua angka dan jawaban ≤ 100.
+- Penyetel angka keseimbangan ada di `src/lib/game/data.ts` → objek `TUNE`.

@@ -68,6 +68,8 @@ export interface HudState {
     total: number; // total monster termasuk bos
     isBoss: boolean;
     incoming: number; // detik sampai monster berikutnya datang (0 = sedang bertarung)
+    mode: "wave" | "champion" | "mopup"; // gelombang pasukan / duel bos / habisi sisa pasukan
+    enemiesLeft: number;
     bossName: string;
     bossTitle: string;
     bossEmoji: string;
@@ -276,7 +278,11 @@ export class GameEngine {
   private giantCounter = 0;
   private stageIndex = 0;
   private stageTotal = 1;
-  private champGap = 0;
+  private champGap = 0; // (lama) tidak dipakai lagi; dipertahankan agar aman
+  /** Alur stage: gelombang pasukan → bos (+pasukan) → … → bos akhir → habisi sisa pasukan */
+  private stageMode: "wave" | "champion" | "mopup" = "wave";
+  private waveTimer = 0;
+  private mopTimer = 0;
   private champTime = 0;
 
   private gridCols = 20;
@@ -362,12 +368,15 @@ export class GameEngine {
   private setupLevel() {
     const L = this.level;
     this.map = mapForLevel(L);
-    // stage = beberapa monster penjaga (berjalan bergiliran) lalu BOS
-    const minis = L <= 2 ? 3 : L <= 6 ? 4 : 5;
-    this.stageTotal = minis + 1;
+    // stage = gelombang pasukan pembuka → bos 1 (+pasukan) → … → bos akhir (+pasukan)
+    this.stageTotal = BALANCE.bossCount(L);
     this.stageIndex = 0;
     this.champGap = 0;
+    this.stageMode = "wave";
+    this.waveTimer = BALANCE.openingWave(L);
+    this.mopTimer = 0;
     this.boss = this.makeChampion(0);
+    this.boss.hp = 0; // bos belum masuk arena selama gelombang pembuka
     this.champTime = 0;
     this.units = [];
     this.enemies = [];
@@ -451,7 +460,8 @@ export class GameEngine {
       const v = Math.round(this.maxHp * 0.35);
       return { type: "heal", label: `Perbaiki Benteng +${v}`, icon: "🛡️", value: v };
     }
-    const seq: RewardType[] = ["weapon", "multiply", "weapon", "monster"];
+    // senjata naik 1× tiap 4 jawaban benar (sebelumnya 2×) supaya tidak melesat terlalu kuat
+    const seq: RewardType[] = ["weapon", "multiply", "monster", "multiply"]; // hadiah pertama selalu senjata
     const type = seq[this.rewardCounter % seq.length];
     this.rewardCounter++;
     if (type === "weapon") {
@@ -557,7 +567,7 @@ export class GameEngine {
 
   private punish() {
     const L = this.level;
-    const g = Math.max(1, Math.round(BALANCE.gruntPower(L) * 0.7));
+    const g = Math.max(1, Math.round(this.gp() * 0.7));
     const size = BALANCE.waveSize(L) * 2;
     const cx = rnd(0.2, 0.8);
     for (let i = 0; i < size; i++) this.spawnEnemy(cx + rnd(-0.25, 0.25), 1 + rnd(0, 0.15), 0, g);
@@ -619,7 +629,11 @@ export class GameEngine {
   private spawnWave(mult = 1, yBase?: number) {
     const L = this.level;
     const sp = this.boss.def.specials;
-    const size = Math.round(BALANCE.waveSize(L) * mult * (this.boss.enraged ? 1.5 : 1));
+    // jumlah prajurit mengikuti ANGGARAN kekuatan: di awal (senjata lemah) sedikit,
+    // makin kuat pemain → jalan makin penuh. Kekuatan minimum prajurit = 1.
+    const ref = BALANCE.refRaw(L, this.weaponLevel);
+    const fill = Math.min(1, BALANCE.waveBudget(L, ref) / (BALANCE.waveSize(L) * this.gp()));
+    const size = Math.max(1, Math.round(BALANCE.waveSize(L) * mult * fill * (this.boss.enraged ? 1.5 : 1)));
     // pasukan musuh keluar dari posisi bos (ikut maju), bukan dari langit-langit
     // pengawal muncul di depan kaki monster (badan monster kini sangat besar)
     const originY = yBase ?? Math.min(1.04, Math.max(0.14, this.boss.y - (0.03 + 0.07 * this.boss.scale)));
@@ -629,7 +643,7 @@ export class GameEngine {
     const eliteChance = L >= 6 ? (sp.includes("elite") ? 0.08 : 0.03) : 0;
     // normalise so the average power per spawn equals BALANCE.gruntPower regardless of composition
     const comp = runnerChance * 0.5 + bruteChance * 4 + eliteChance * 12 + (1 - runnerChance - bruteChance - eliteChance);
-    const g = Math.max(1, BALANCE.gruntPower(L) / comp);
+    const g = Math.max(1, this.gp() / comp);
     for (let i = 0; i < size; i++) {
       const r = Math.random();
       const x = cx + rnd(-0.22, 0.22);
@@ -708,17 +722,27 @@ export class GameEngine {
     }
   }
 
+  /** Kekuatan rata-rata prajurit lawan, menyesuaikan senjata pemain (tanpa dinding mendadak). */
+  private gp() {
+    return BALANCE.gruntPower(this.level, BALANCE.refRaw(this.level, this.weaponLevel));
+  }
+
   private updateSpawns(wdt: number) {
+    if (this.stageMode === "mopup") return; // bos akhir tumbang: tidak ada pasukan baru
     this.spawnTimer -= wdt;
     if (this.spawnTimer <= 0) {
-      // tekanan naik selama duel dengan monster yang sama, lalu reset tiap monster baru
-      const pressure = Math.max(0.65, 1 - this.champTime * 0.005);
       const L = this.level;
-      const grace = L === 1 ? 2 : L === 2 ? 1.6 : L === 3 ? 1.3 : 1; // masa belajar level awal
-      const guard = this.boss.isBoss ? 1 : 1.2; // penjaga mengirim pasukan lebih jarang
-      const between = this.champGap > 0 ? 1.6 : 1; // jeda antar monster = napas sejenak
-      this.spawnTimer = (BALANCE.spawnInterval(L) / this.boss.def.spawnMult) * pressure * grace * guard * between * rnd(0.85, 1.15);
-      this.spawnWave();
+      // tekanan naik pelan selama satu fase, lalu reset ketika bos berikutnya masuk
+      const pressure = Math.max(0.7, 1 - this.champTime * 0.004);
+      const grace = L === 1 ? 1.6 : L === 2 ? 1.35 : L === 3 ? 1.15 : 1; // masa belajar level awal
+      const duel = this.stageMode === "champion" ? 1.35 : 1; // saat bos ada, pasukan juga keluar dari belakangnya
+      this.spawnTimer = (BALANCE.spawnInterval(L) / this.boss.def.spawnMult) * pressure * grace * duel * rnd(0.85, 1.15);
+      if (this.stageMode === "champion" && this.boss.hp > 0) {
+        this.spawnWave(0.6); // barisan depan kaki bos
+        this.spawnWave(0.45, Math.min(1.12, this.boss.y + 0.05)); // pasukan berbaris DI BELAKANG bos
+      } else {
+        this.spawnWave(1, 1.02); // gelombang pasukan memenuhi jalan
+      }
     }
   }
 
@@ -762,7 +786,10 @@ export class GameEngine {
       b.walkPhase += wdt * (b.enraged ? 7 : 4.5); // monster raksasa melangkah lebih berat
       // goyang kiri-kanan seperti monster berjalan
       b.x = 0.5 + Math.sin(this.elapsed * 0.55) * 0.13;
-      if (b.y < 0.1) b.y = 0.1; // mentok di garis benteng
+      // bos berhenti di GARIS DEPAN lalu bertarung di sana (tidak menggebuki benteng);
+      // ancaman ke benteng datang dari pasukan yang lolos — makin lama duel, makin deras
+      const holdLine = b.isBoss ? 0.4 : 0.5;
+      if (b.y < holdLine) b.y = holdLine;
       if (!b.warnedClose && b.y < 0.35) {
         b.warnedClose = true;
         this.addFloat(0.5, 0.3, b.isBoss ? "⚠️ BOS MENDEKAT!" : "⚠️ MONSTER MENDEKAT!", "#fca5a5", 24);
@@ -776,7 +803,7 @@ export class GameEngine {
       const dx = Math.abs(u.x - b.x);
       const dy = Math.abs(u.y - b.y);
       if (dx < 0.1 + 0.12 * b.scale && dy < 0.06 + 0.04 * b.scale) {
-        const trample = Math.max(1, Math.round(BALANCE.gruntPower(this.level) * 0.8));
+        const trample = Math.max(1, Math.round(this.gp() * 0.8));
         if (u.giant) {
           u.power -= trample * 2;
           if (u.power <= 0) {
@@ -800,7 +827,7 @@ export class GameEngine {
       b.siegeT += wdt;
       if (b.siegeT >= 1) {
         b.siegeT = 0;
-        const dmg = Math.min(Math.round(this.maxHp * 0.25), Math.max(2, Math.round((4 + this.level * 0.8 + (b.enraged ? 4 : 0)) * b.dmgMul)));
+        const dmg = Math.min(Math.round(this.maxHp * 0.12), Math.max(2, Math.round((3 + Math.min(40, this.level) * 0.35 + (b.enraged ? 2 : 0)) * b.dmgMul)));
         this.hp -= dmg;
         this.dmgFlash = 1;
         this.shake = Math.max(this.shake, 0.6);
@@ -839,7 +866,7 @@ export class GameEngine {
           if (u.y < zoneY) continue;
           if (Math.abs(u.x - zoneX) > 0.3) continue;
           // damage proporsional: brute/elite boss makin sakit
-          const dmg = Math.max(1, Math.round(BALANCE.gruntPower(this.level) * (b.enraged ? 2.2 : 1.4) * b.dmgMul * (0.7 + Math.random() * 0.6)));
+          const dmg = Math.max(1, Math.round(this.gp() * (b.enraged ? 2.2 : 1.4) * b.dmgMul * (0.7 + Math.random() * 0.6)));
           if (u.giant) {
             u.power -= dmg * 3;
             u.attackT = Math.max(u.attackT, 0.4);
@@ -868,8 +895,10 @@ export class GameEngine {
         this.addFloat(b.x, Math.min(0.95, b.y + 0.08), b.attackKind === "slam" ? "💥 HANTAMAN BOS!" : "🦶 INJAKAN BOS!", "#fca5a5", 22);
         play("slam");
         // jeda berikutnya — makin tinggi level makin sering
-        const base = Math.max(3.2, 6.5 - this.level * 0.12 - (b.enraged ? 1.2 : 0));
-        b.attackCd = base * rnd(0.85, 1.15);
+        const base = Math.max(3.6, 7 - Math.min(30, this.level) * 0.1 - (b.enraged ? 1.2 : 0));
+        const early = this.level <= 3 ? 1.5 : 1; // level awal: bos menghantam lebih jarang
+        const minor = b.isBoss ? 1 : 1.35; // bos sebelum bos akhir menghantam lebih jarang
+        b.attackCd = base * early * minor * rnd(0.85, 1.15);
       }
       return;
     }
@@ -1001,7 +1030,7 @@ export class GameEngine {
       const em = this.edgeMargin(e.r);
       e.x = clamp(e.x, em, 1 - em); // tak pernah keluar dari jalan
       if (e.y <= 0) {
-        const dmg = Math.min(Math.round(this.maxHp * 0.5), Math.max(1, Math.round((e.power / BALANCE.gruntPower(this.level)) * (1.6 + this.level * 0.14))));
+        const dmg = Math.min(Math.round(this.maxHp * 0.5), Math.max(1, Math.round((e.power / this.gp()) * (0.9 + Math.min(40, this.level) * 0.05))));
         this.hp -= dmg;
         this.dmgFlash = 1;
         this.shake = 0.35;
@@ -1075,7 +1104,7 @@ export class GameEngine {
     }
     if (b.hp <= 0) {
       b.hp = 0;
-      if (b.isBoss) this.levelClear();
+      if (b.isBoss) this.finalBossDown();
       else this.championDefeated();
     }
   }
@@ -1243,8 +1272,9 @@ export class GameEngine {
     // penjaga memakai wujud monster lain (lebih kecil), makin lama makin kuat
     const visIdx = isBoss ? bossIdx : (bossIdx + 3 + k * 3) % BOSSES.length === bossIdx ? (bossIdx + 1) % BOSSES.length : (bossIdx + 3 + k * 3) % BOSSES.length;
     // stage panjang: penjaga makin tangguh, bos jauh lebih tebal
-    const hp = isBoss ? BALANCE.bossHp(L) : BALANCE.guardHp(L, k);
-    const baseSpeed = Math.min(0.035, 0.014 + L * 0.0009 + (tier - 1) * 0.003);
+    const hp = BALANCE.champHp(L, k, this.stageTotal, BALANCE.refRaw(L, this.weaponLevel));
+    // bos berjalan pelan: butuh ±2,8× lama duel untuk sampai benteng → ada waktu berjuang
+    const baseSpeed = 0.9 / (BALANCE.fightSeconds(L, k, this.stageTotal) * 2.8);
     return {
       def: BOSSES[visIdx],
       index: visIdx,
@@ -1259,12 +1289,12 @@ export class GameEngine {
       warnT: 0,
       x: 0.5,
       y: 1.04,
-      speed: baseSpeed * (isBoss ? 1 : 1.3),
+      speed: baseSpeed,
       walkPhase: Math.random() * 10,
       siegeT: 0,
       warnedClose: false,
       isBoss,
-      scale: isBoss ? 1 : 0.62 + k * 0.05,
+      scale: isBoss ? 1 : Math.min(0.92, 0.66 + k * 0.05),
       dmgMul: isBoss ? 1 : 0.55 + k * 0.08,
     };
   }
@@ -1281,18 +1311,58 @@ export class GameEngine {
     this.shake = Math.max(this.shake, 0.5);
     this.hp = Math.min(this.maxHp, this.hp + Math.round(this.maxHp * 0.12));
     this.addFloat(b.x, Math.min(1, by + 0.06), `+${bonus}`, "#fde68a", 22);
-    const next = this.stageIndex + 1;
-    const nextIsBoss = next >= this.stageTotal - 1;
-    this.setToast(nextIsBoss ? `💥 Penjaga tumbang! BOS segera datang!` : `💥 Monster ${next}/${this.stageTotal - 1} tumbang!`, "good");
+    const done = this.stageIndex + 1;
+    const nextIsFinal = done >= this.stageTotal - 1;
+    this.setToast(nextIsFinal ? `💥 Bos ${done} tumbang! Pasukan datang… BOS AKHIR menyusul!` : `💥 Bos ${done} tumbang! Gelombang pasukan datang!`, "good");
     play("levelup");
-    this.champGap = nextIsBoss ? 2.4 : 1.6;
+    // gelombang pasukan berikutnya, lalu bos selanjutnya masuk
+    this.stageIndex = done;
+    this.stageMode = "wave";
+    this.waveTimer = BALANCE.betweenWave(this.level);
+    this.champTime = 0;
+    this.pushHud(true);
+  }
+
+  /** Bos akhir tumbang — stage BELUM selesai sampai semua pasukan lawan habis. */
+  private finalBossDown() {
+    const b = this.boss;
+    const by = Math.max(0.1, b.y);
+    this.burst(b.x, by, b.def.glow, 50);
+    this.burst(b.x, by, "#fbbf24", 24);
+    this.spawnShockwave(b.x, by, b.def.glow, 0.4);
+    this.shake = Math.max(this.shake, 0.7);
+    play("boss");
+    this.stageMode = "mopup";
+    this.mopTimer = 0;
+    this.stageIndex = this.stageTotal; // semua bos selesai
+    this.setToast(`👑 ${b.def.name} tumbang! Habisi semua sisa pasukan!`, "good");
+    this.addFloat(0.5, 0.6, "HABISI SISA PASUKAN!", "#fde68a", 24);
+    this.pushHud(true);
+  }
+
+  /** Bos ke-(stageIndex) masuk arena, diiringi pasukan besar di belakangnya. */
+  private enterChampion() {
+    this.headsFired = 0;
+    this.boss = this.makeChampion(this.stageIndex);
+    this.champTime = 0;
+    this.stageMode = "champion";
+    this.championEntrance();
+    if (this.boss.isBoss) {
+      this.addFloat(0.5, 0.75, `⚠️ BOS AKHIR: ${this.boss.def.name.toUpperCase()}!`, "#fca5a5", 26);
+      this.setToast(`👑 ${this.boss.def.name} datang bersama pasukannya!`, "bad");
+      this.shake = Math.max(this.shake, 0.6);
+    } else {
+      this.addFloat(0.5, 0.8, `👾 BOS ${this.stageIndex + 1}/${this.stageTotal} datang!`, "#fde68a", 22);
+      this.setToast(`👾 Bos ${this.stageIndex + 1} datang bersama pasukannya!`, "bad");
+    }
+    play("roar");
     this.pushHud(true);
   }
 
   /** Monster masuk arena: raungan menyapu pasukan yang menumpuk di garis depan + gelombang pengawal. */
   private championEntrance() {
     const b = this.boss;
-    const line = b.isBoss ? 0.66 : 0.74;
+    const line = b.isBoss ? 0.72 : 2; // hanya bos akhir yang raungannya menyapu pasukan
     let swept = 0;
     for (let i = this.units.length - 1; i >= 0; i--) {
       const u = this.units[i];
@@ -1312,29 +1382,21 @@ export class GameEngine {
     this.spawnShockwave(0.5, 0.95, b.def.color, 0.5);
     this.shake = Math.max(this.shake, 0.5);
     if (swept > 0) this.addFloat(0.5, 0.86, `🔊 RAUNGAN! -${swept} pasukan`, "#fca5a5", 20);
-    this.spawnWave(b.isBoss ? 2 : 1.3);
+    // pasukan pengiring berbaris di belakang bos (beberapa lapis)
+    const rows = b.isBoss ? 4 : 3;
+    for (let r = 0; r < rows; r++) this.spawnWave(b.isBoss ? 0.9 : 0.7, Math.min(1.16, b.y + 0.04 + r * 0.035));
   }
 
   private updateStage(wdt: number) {
     this.champTime += wdt;
-    if (this.champGap <= 0) return;
-    this.champGap -= wdt;
-    if (this.champGap > 0) return;
-    this.champGap = 0;
-    this.stageIndex++;
-    this.headsFired = 0;
-    this.boss = this.makeChampion(this.stageIndex);
-    this.champTime = 0;
-    this.championEntrance();
-    if (this.boss.isBoss) {
-      this.addFloat(0.5, 0.75, `⚠️ BOS ${this.boss.def.name.toUpperCase()}!`, "#fca5a5", 26);
-      this.setToast(`👑 ${this.boss.def.name} memasuki arena!`, "bad");
-      this.shake = Math.max(this.shake, 0.6);
-      play("roar");
-    } else {
-      this.addFloat(0.5, 0.8, `👾 Monster ${this.stageIndex + 1}/${this.stageTotal - 1}`, "#fde68a", 22);
+    if (this.stageMode === "wave") {
+      this.waveTimer -= wdt;
+      if (this.waveTimer <= 0) this.enterChampion();
+    } else if (this.stageMode === "mopup") {
+      this.mopTimer += wdt;
+      // selesai bila semua pasukan habis (pengaman: maks 60 detik)
+      if (this.enemies.length === 0 || this.mopTimer > 60) this.levelClear();
     }
-    this.pushHud(true);
   }
 
   // ── phase transitions ────────────────────────────────────────
@@ -1436,13 +1498,15 @@ export class GameEngine {
         return {
           index: this.stageIndex,
           total: this.stageTotal,
-          isBoss: this.boss.isBoss,
-          incoming: Math.max(0, this.champGap),
+          isBoss: this.boss.isBoss && this.stageMode === "champion",
+          incoming: this.stageMode === "wave" ? Math.max(0, this.waveTimer) : 0,
+          mode: this.stageMode,
+          enemiesLeft: this.enemies.length,
           bossName: fb.name,
           bossTitle: fb.title,
           bossEmoji: fb.emoji,
           bossColor: fb.color,
-          bossMaxHp: BALANCE.bossHp(this.level),
+          bossMaxHp: BALANCE.champHp(this.level, this.stageTotal - 1, this.stageTotal, BALANCE.refRaw(this.level, this.weaponLevel)),
           bossDesc: fb.desc,
         };
       })(),
