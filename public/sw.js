@@ -1,6 +1,11 @@
-/* Survival Matematic – service worker (offline shell + asset cache) */
-const CACHE = "sm-cache-v1";
-const PRECACHE = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/images/menu-bg.jpg"];
+/* Survival Matematic – service worker (offline shell + asset cache)
+   Mendukung hosting di sub-folder (mis. GitHub Pages /nama-repo/) — base path
+   diambil otomatis dari scope tempat service worker ini terdaftar. */
+const CACHE = "sm-cache-v2";
+const BASE = new URL(self.registration.scope).pathname.replace(/\/$/, "");
+const P = (path) => BASE + path;
+const HOME = P("/");
+const PRECACHE = [HOME, P("/manifest.webmanifest"), P("/icons/icon-192.png"), P("/icons/icon-512.png"), P("/images/menu-bg.jpg")];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -23,23 +28,23 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // never cache API or Firebase traffic
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  // jangan cache API maupun lalu lintas Firebase (beda origin)
+  if (url.origin !== self.location.origin || url.pathname.startsWith(P("/api/"))) return;
 
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put("/", copy));
+          caches.open(CACHE).then((c) => c.put(HOME, copy));
           return res;
         })
-        .catch(() => caches.match("/")),
+        .catch(() => caches.match(HOME)),
     );
     return;
   }
 
-  // static assets: stale-while-revalidate
+  // aset statis: stale-while-revalidate
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)

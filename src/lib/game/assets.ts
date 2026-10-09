@@ -63,6 +63,16 @@ export const UNIT_ASSET_URLS = {
 } as const;
 
 // ── PNG: lain-lain ────────────────────────────────────────────
+// ── FILE 3D ASLI (.glb) — sumber monster 3D sungguhan ─────────
+// Taruh di public/assets/models/ . Bila ada, model ini dipakai menggantikan
+// rig prosedural bawaan (yang juga sudah 3D ber-sendi).
+export const MODEL_DIR = `${ASSET_BASE}/models`;
+
+export const MODEL_FILES = {
+  boss: (index: number) => `${MODEL_DIR}/boss_${String(index).padStart(2, "0")}_${BOSS_ASSET_IDS[index] ?? "monster"}.glb`,
+  giant: (index: number) => `${MODEL_DIR}/giant_${String(index).padStart(2, "0")}_${GIANT_ASSET_IDS[index % GIANT_ASSET_IDS.length]}.glb`,
+};
+
 export const LOGO_URL = `${ASSET_BASE}/logo.png`;
 export const MENU_BG_URL = `${ASSET_BASE}/menu_bg.png`;
 export const CANNON_URL = `${ASSET_BASE}/cannon.png`;

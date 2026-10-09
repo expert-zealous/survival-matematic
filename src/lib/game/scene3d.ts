@@ -3,15 +3,14 @@
 // red mobs marching toward the player, a champion with a huge number,
 // and a packed horde behind the boss. Math rewards stay the unique twist.
 //
-// Monster PNG kustom: file public/assets/boss_XX_*.png / giant_XX_*.png
-// otomatis DIUBAH menjadi monster 3D VOXEL (kubus bervolume) sehingga
-// benar-benar berbentuk 3D yang berjalan & menghantam — bukan gambar
-// 2D. Kalau file tidak ada, monster 3D prosedural dipakai (fallback).
+// MONSTER 3D SUNGGUH: model berupa sendi (rig) yang mulus — bukan hasil
+// pikselisasi PNG. Bila pemain menyediakan file .glb di public/assets/models/,
+// file itu yang dipakai sebagai model asli (lihat src/lib/game/models.ts).
 import * as THREE from "three";
 import type { MapTheme } from "./data";
-import { bossAssetUrl, giantAssetUrl } from "./assets";
 import { buildScenery, type Scenery } from "./scenery";
-import { buildVoxelGroup, disposeVoxelGroup, fetchVoxelData, poseVoxelGroup, type VoxelData } from "./voxel3d";
+import { buildBossRig, buildGiantRig, loadGlb, wrapGlb, type MonsterRig } from "./models";
+import { MODEL_FILES } from "./assets";
 
 const LANE_W = 6.4;
 const LANE_LEN = 20.5;
@@ -628,9 +627,9 @@ export class Scene3D {
     wings: THREE.Object3D[];
     extras: THREE.Object3D[];
     label: THREE.Sprite;
-    voxel: THREE.Group | null;
-    voxelUrl: string;
-    voxelData: VoxelData | null;
+    rig: MonsterRig | null;
+    modelIdx: number;
+    holder: THREE.Group | null;
   }[] = [];
   private floatPool: THREE.Sprite[] = [];
   private texCache = new Map<string, THREE.Texture>();
@@ -640,12 +639,12 @@ export class Scene3D {
   private vignetteMat: THREE.MeshBasicMaterial;
   private fenceMat = stdMat(0x7a4a1c, 0.05, 0.75);
   private propMat = stdMat(0x65a30d, 0.02, 0.7);
-  // ── boss 3D (voxel dari PNG / prosedural) + telegraf serangan ──
+  // ── boss 3D (rig ber-sendi / file .glb) + telegraf serangan ──
   private bossPng: THREE.Sprite;
-  private bossPngUrl = "";
-  private bossVoxel: THREE.Group | null = null;
-  private bossVoxelUrl = "";
-  private bossVoxelIdx = -1;
+  private bossModel: MonsterRig | null = null;
+  private bossModelIdx = -1;
+  private bossHolder: THREE.Group | null = null;
+  private bossRigs = new Map<number, MonsterRig>();
   private bossWarn: THREE.Sprite;
   private bossRing: THREE.Mesh;
   private bossRingMat: THREE.MeshBasicMaterial;
@@ -1192,9 +1191,26 @@ export class Scene3D {
     this.enemyGlow.intensity = 2 + ratio * 5 + (f.enraged ? 3 : 0);
   }
 
-  /** Minta data voxel PNG (async, hasil disimpan di slot lalu dipakai frame berikut). */
-  private requestVoxel(url: string, cb: (data: VoxelData | null) => void) {
-    void fetchVoxelData(url, 96).then(cb);
+  /**
+   * Ambil monster 3D: bila ada file .glb di public/assets/models gunakan itu (model asli),
+   * bila tidak pakai rig prosedural ber-sendi (mulus, bukan hasil pikselisasi PNG).
+   */
+  private requestModel(glbUrl: string | null, fallback: () => MonsterRig, cb: (rig: MonsterRig) => void) {
+    if (!glbUrl) {
+      cb(fallback());
+      return;
+    }
+    void loadGlb(glbUrl).then((data) => cb(data ? wrapGlb(data, 1, 1) : fallback()));
+  }
+
+  /** Ambil rig bos dari cache (untuk dipakai bergantian) atau buat baru. */
+  private makeBossRig(idx: number, size: number): MonsterRig {
+    const cached = this.bossRigs.get(idx);
+    if (cached) {
+      this.bossRigs.delete(idx);
+      return cached;
+    }
+    return buildBossRig(idx, size);
   }
 
   private syncGiants(f: RenderFrame) {
@@ -1208,31 +1224,39 @@ export class Scene3D {
       this.giantSlots.push({
         emoji: gu.emoji, giantIndex: gu.giantIndex ?? 0,
         group: made.group, wings: made.wings, extras: made.extras, label,
-        voxel: null, voxelUrl: "__pending__", voxelData: null,
+        rig: null, modelIdx: -1, holder: null,
       });
       const slot = this.giantSlots[this.giantSlots.length - 1];
-      const url = giantAssetUrl(slot.giantIndex);
-      slot.voxelUrl = url;
-      this.requestVoxel(url, (data) => {
-        slot.voxelData = data;
-        if (data) {
-          const vg = buildVoxelGroup(data, { height: 2.6 * GIANT_SIZE, depth: 0.55, maxWidth: 5 });
-          vg.visible = false;
-          this.scene.add(vg);
-          slot.voxel = vg;
-        }
-      });
+      slot.modelIdx = slot.giantIndex;
+      // monster pemain berdiri dalam wadah yang MENGHADAP -Z → jalannya selalu ke depan
+      const holder = new THREE.Group();
+      holder.rotation.y = 0;
+      holder.visible = false;
+      this.scene.add(holder);
+      slot.holder = holder;
+      slot.rig = buildGiantRig(slot.giantIndex, GIANT_SIZE);
+      holder.add(slot.rig.group);
+      const glb = MODEL_FILES.giant(slot.giantIndex);
+      if (glb) {
+        this.requestModel(glb, () => buildGiantRig(slot.giantIndex, GIANT_SIZE), (rig) => {
+          if (slot.modelIdx !== slot.giantIndex || !slot.holder) return;
+          holder.remove(slot.rig!.group);
+          slot.rig!.dispose();
+          slot.rig = rig;
+          holder.add(slot.rig.group);
+        });
+      }
     }
     for (let i = 0; i < this.giantSlots.length; i++) {
       const slot = this.giantSlots[i];
       const u = giants[i];
-      const hasVoxel = !!slot.voxel;
-      slot.group.visible = !!u && !hasVoxel;
+      const hasRig = !!slot.rig;
+      slot.group.visible = !!u && !hasRig;
       slot.label.visible = !!u;
-      if (slot.voxel) slot.voxel.visible = !!u;
+      if (slot.holder) slot.holder.visible = !!u && hasRig;
       if (!u) continue;
       if (slot.emoji !== u.emoji || slot.giantIndex !== (u.giantIndex ?? 0)) {
-        // ganti model prosedural bila jenis berubah (voxel tetap bila URL sama)
+        // ganti model prosedural bila jenis monster berganti
         this.scene.remove(slot.group);
         const made = makeGiant(u.emoji);
         this.scene.add(made.group);
@@ -1243,23 +1267,24 @@ export class Scene3D {
         const newIdx = u.giantIndex ?? 0;
         if (newIdx !== slot.giantIndex) {
           slot.giantIndex = newIdx;
-          if (slot.voxel) {
-            this.scene.remove(slot.voxel);
-            disposeVoxelGroup(slot.voxel);
-            slot.voxel = null;
+          if (slot.rig) {
+            slot.holder!.remove(slot.rig.group);
+            slot.rig.dispose();
+            slot.rig = null;
           }
-          const url = giantAssetUrl(newIdx);
-          slot.voxelUrl = url;
-          slot.voxelData = null;
-          this.requestVoxel(url, (data) => {
-            slot.voxelData = data;
-            if (data) {
-              const vg = buildVoxelGroup(data, { height: 2.6 * GIANT_SIZE, depth: 0.55, maxWidth: 5 });
-              vg.visible = true;
-              this.scene.add(vg);
-              slot.voxel = vg;
-            }
-          });
+          slot.modelIdx = newIdx;
+          slot.rig = buildGiantRig(newIdx, GIANT_SIZE);
+          slot.holder!.add(slot.rig.group);
+          const glb2 = MODEL_FILES.giant(newIdx);
+          if (glb2) {
+            this.requestModel(glb2, () => buildGiantRig(newIdx, GIANT_SIZE), (rig2) => {
+              if (slot.modelIdx !== newIdx || !slot.holder) return;
+              slot.holder.remove(slot.rig!.group);
+              slot.rig!.dispose();
+              slot.rig = rig2;
+              slot.holder.add(slot.rig.group);
+            });
+          }
         }
       }
       const p = worldOf(u.x, u.y);
@@ -1274,15 +1299,19 @@ export class Scene3D {
       const lungeZ = slam * -0.7 + (u.lunge ?? 0) * punch * -0.25;
       const walkSway = step * 0.07;
       const walkBob = Math.abs(step) * 0.09;
-      if (hasVoxel && slot.voxel) {
-        // ── MONSTER 3D DARI PNG: berjalan (goyang, langkah) + menghantam ──
-        const v = slot.voxel;
-        v.position.set(p.x, Math.max(0, walkBob * 0.6 - crouch * 0.5), p.z + lungeZ);
-        // menghadap musuh (-Z): diputar 180°
-        v.rotation.set(0, Math.PI + Math.sin(f.time * 2 + u.seed) * 0.08, walkSway * 0.25);
-        const bs = 1 + slam * 0.08;
-        v.scale.set(bs, 1 - slam * 0.06, bs);
-        poseVoxelGroup(v, { walk: f.time * 9 + u.seed * 7, stride: atk > 0 ? 0.3 : 1, windup, slam });
+      if (slot.rig) {
+        // ── MONSTER 3D BER-SENDI: wadah hanya diposisikan, sendi dianimasikan rig ──
+        slot.holder!.position.set(p.x, Math.max(0, walkBob * 0.5 - crouch * 0.4), p.z + lungeZ);
+        slot.holder!.rotation.set(0, 0, walkSway * 0.12);
+        slot.rig.animate({
+          time: f.time,
+          walk: f.time * 8.5 + u.seed * 7,
+          stride: atk > 0 ? 0.35 : 1,
+          windup,
+          slam,
+          hit: f.hitFlash > 0 ? 1 : 0,
+          enraged: f.enraged,
+        });
       } else {
         slot.group.position.set(p.x, Math.max(0, bob + walkBob * 0.5 - crouch + slam * 0.1), p.z + lungeZ);
         slot.group.rotation.y = Math.sin(f.time * 2 + u.seed) * 0.08 + walkSway * 0.3;
@@ -1297,7 +1326,7 @@ export class Scene3D {
       const mat = slot.label.material as THREE.SpriteMaterial;
       mat.map = this.cachedText(text, "#fff");
       mat.opacity = 1;
-      const giantTop = (hasVoxel && slot.voxel ? Number(slot.voxel.userData.voxelHeight ?? 4) : 2.5 * GIANT_SIZE) + 0.7;
+      const giantTop = (hasRig && slot.rig ? slot.rig.height : 2.5 * GIANT_SIZE) + 0.8;
       slot.label.position.set(p.x, giantTop - crouch, p.z);
       slot.label.scale.set((1.5 + punch * 0.3) * 1.3, (0.75 + punch * 0.15) * 1.3, 1);
     }
@@ -1360,29 +1389,39 @@ export class Scene3D {
     const alive = f.bossHp > 0 || f.phase === "clear";
     // ── POSISI BERJALAN: bos tidak lagi di panggung, melainkan di jalur ──
     const bp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
-    // ── voxel 3D dari PNG (diminta sekali per bos) ──
-    const url = bossAssetUrl(idx);
-    if (url !== this.bossVoxelUrl || idx !== this.bossVoxelIdx) {
-      this.bossVoxelUrl = url;
-      this.bossVoxelIdx = idx;
-      if (this.bossVoxel) {
-        this.scene.remove(this.bossVoxel);
-        disposeVoxelGroup(this.bossVoxel);
-        this.bossVoxel = null;
+    // ── monster 3D (rig ber-sendi, atau file .glb bila pemain menyediakannya) ──
+    if (idx !== this.bossModelIdx) {
+      this.bossModelIdx = idx;
+      if (this.bossModel) {
+        this.scene.remove(this.bossModel.group);
+        this.bossModel.dispose();
+        this.bossModel = null;
       }
-      this.bossPng.visible = false;
-      this.requestVoxel(url, (data) => {
-        if (!data) return;
-        // hanya pakai bila bos masih sama (hindari balapan antar level)
-        if (this.bossVoxelIdx !== idx) return;
-        const vg = buildVoxelGroup(data, { height: 3.3 * MONSTER_SIZE, depth: 0.55, maxWidth: 9.5 });
-        this.scene.add(vg);
-        this.bossVoxel = vg;
-      });
+      if (this.bossHolder) {
+        this.scene.remove(this.bossHolder);
+        this.bossHolder = null;
+      }
+      // bos menghadap +Z (ke arah pemain/kamera)
+      const holder = new THREE.Group();
+      holder.rotation.y = Math.PI;
+      this.scene.add(holder);
+      this.bossHolder = holder;
+      this.bossModel = this.makeBossRig(idx, MONSTER_SIZE);
+      holder.add(this.bossModel.group);
+      const glb = MODEL_FILES.boss(idx);
+      if (glb) {
+        this.requestModel(glb, () => this.makeBossRig(idx, MONSTER_SIZE), (rig) => {
+          if (this.bossModelIdx !== idx || !this.bossHolder) return;
+          this.bossHolder.remove(this.bossModel!.group);
+          this.bossModel!.dispose();
+          this.bossModel = rig;
+          this.bossHolder.add(this.bossModel.group);
+        });
+      }
     }
-    const useVoxel = !!this.bossVoxel;
-    for (let i = 0; i < this.bosses.length; i++) this.bosses[i].group.visible = i === idx && alive && !useVoxel;
-    if (this.bossVoxel) this.bossVoxel.visible = alive;
+    const useRig = !!this.bossModel;
+    for (let i = 0; i < this.bosses.length; i++) this.bosses[i].group.visible = i === idx && alive && !useRig;
+    if (this.bossHolder) this.bossHolder.visible = alive;
     this.bossPng.visible = false;
     const rig = this.bosses[idx];
     const tierScale = 1 + (f.bossTier - 1) * 0.1;
@@ -1404,19 +1443,24 @@ export class Scene3D {
     const baseScale = Number(rig.group.userData.baseScale ?? 1);
     // tinggi badan monster → tanda seru, bar HP, dan angka HP melayang tepat di atas kepala
     const bodyH =
-      useVoxel && this.bossVoxel
-        ? Number(this.bossVoxel.userData.voxelHeight ?? 7) * tierScale * champScale
+      useRig && this.bossModel
+        ? this.bossModel.height * tierScale * champScale
         : 2.4 * baseScale * 1.45 * MONSTER_SIZE * tierScale * champScale;
     const headY = bodyH + 0.9;
     const labelK = 0.9 + 0.5 * champScale; // label bos lebih besar daripada label penjaga
-    if (useVoxel && this.bossVoxel) {
-      const v = this.bossVoxel;
-      v.position.set(bp.x + roarShake, Math.max(0, walkBob * 0.6 + idleBob - crouch * 0.4), bp.z + lungeZ * 0.5);
-      // wajah gambar menghadap +Z = ke arah pemain/kamera
-      v.rotation.set(0, Math.sin(f.time * 1.4) * 0.06, stepL * 0.035);
-      const s = tierScale * champScale * (1 + f.hitFlash * 0.06 + slam * 0.08 + (warning ? Math.sin(f.time * 20) * 0.02 : 0));
-      v.scale.set(s, s * (1 - slam * 0.06), s);
-      poseVoxelGroup(v, { walk, stride: atk > 0 ? 0.25 : 1, windup, slam });
+    if (this.bossModel && this.bossHolder) {
+      // wadah (sudah menghadap pemain) hanya diposisikan; sendi dianimasikan rig → mulus
+      this.bossHolder.position.set(bp.x + roarShake, Math.max(0, walkBob * 0.55 + idleBob - crouch * 0.35), bp.z + lungeZ * 0.5);
+      this.bossHolder.rotation.set(0, Math.PI, stepL * 0.04);
+      this.bossModel.animate({
+        time: f.time,
+        walk,
+        stride: atk > 0 ? 0.25 : 1,
+        windup,
+        slam,
+        hit: f.hitFlash > 0 ? 1 : 0,
+        enraged: f.enraged,
+      });
     } else {
       rig.group.position.set(
         bp.x + roarShake,
@@ -1602,16 +1646,20 @@ export class Scene3D {
       this.scenery.dispose();
       this.scenery = null;
     }
-    if (this.bossVoxel) {
-      this.scene.remove(this.bossVoxel);
-      disposeVoxelGroup(this.bossVoxel);
-      this.bossVoxel = null;
+    if (this.bossModel) {
+      this.scene.remove(this.bossModel.group);
+      this.bossModel.dispose();
+      this.bossModel = null;
+    }
+    if (this.bossHolder) {
+      this.scene.remove(this.bossHolder);
+      this.bossHolder = null;
     }
     for (const slot of this.giantSlots) {
-      if (slot.voxel) {
-        this.scene.remove(slot.voxel);
-        disposeVoxelGroup(slot.voxel);
-        slot.voxel = null;
+      if (slot.rig) {
+        this.scene.remove(slot.rig.group);
+        slot.rig.dispose();
+        slot.rig = null;
       }
     }
     this.renderer.dispose();

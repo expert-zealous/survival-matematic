@@ -14,46 +14,43 @@ game memakai model 3D + suara bawaan (fallback), jadi game tetap jalan.
 | `gate_mul.png` | 512×256 | (cadangan) tekstur gerbang × |
 | `gate_add.png` | 512×256 | (cadangan) tekstur gerbang + |
 
-## 👹 Bos lawan (10) — tampil di arena 3D + galeri bos
+## 🧊 MONSTER 3D — file model `.glb` (opsional, hasil paling bagus)
 
-PNG transparan, ukuran saran **1024×1024**, monster menghadap kamera:
+Monster di game sudah **3D ber-sendi sungguhan** (pinggul, lutut, bahu, siku, leher,
+ekor, sayap) sehingga melangkah, mengayun tangan, dan menghantam dengan mulus.
+Bawaannya sudah 3D — **tidak wajib** menyediakan file apa pun.
 
-| File | Bos |
-|---|---|
-| `boss_00_goblin.png` | #1 Goblin Pencuri |
-| `boss_01_pirate.png` | #2 Kapten Bajak Laut |
-| `boss_02_golem.png` | #3 Golem Batu |
-| `boss_03_spider.png` | #4 Ratu Laba-laba |
-| `boss_04_dragon.png` | #5 Naga Es |
-| `boss_05_lava.png` | #6 Raja Lava |
-| `boss_06_titan.png` | #7 Titan Emas |
-| `boss_07_wizard.png` | #8 Penyihir Bayangan |
-| `boss_08_hydra.png` | #9 Hydra Kristal |
-| `boss_09_doom.png` | #10 Dewa Kehancuran |
-
-> Kalau file ada, gambar PNG-mu **DIUBAH OTOMATIS menjadi monster 3D voxel**
-> (kubus-kubus bervolume mengikuti bentuk & warna gambarmu) yang tampil di
-> arena sebagai makhluk 3D sungguhan: **berjalan mendekati pemain, bergoyang,
-> meraung → angkat tangan → menghantam → shockwave**. Bukan gambar 2D!
-> Kalau tidak ada, monster 3D bawaan yang tampil (tetap bisa menghantam).
-
-## 🦍 Monster raksasa milik pemain (6) — hadiah soal matematika
-
-PNG transparan, ukuran saran **1024×1024**:
+Kalau ingin memakai model buatan sendiri (Blender/Mixamo/Sketchfab), taruh file
+**`.glb`** di folder `public/assets/models/`. File ini **menggantikan** model bawaan:
 
 | File | Monster |
 |---|---|
-| `giant_00_ape.png` | Kera Raksasa |
-| `giant_01_robot.png` | Robot |
-| `giant_02_dragon.png` | Naga |
-| `giant_03_ogre.png` | Ogre |
-| `giant_04_dino.png` | Dino |
-| `giant_05_octopus.png` | Gurita |
+| `models/boss_00_goblin.glb` | #1 Goblin Pencuri |
+| `models/boss_01_pirate.glb` | #2 Kapten Bajak Laut |
+| `models/boss_02_golem.glb` | #3 Golem Batu |
+| `models/boss_03_spider.glb` | #4 Ratu Laba-laba |
+| `models/boss_04_dragon.glb` | #5 Naga Es |
+| `models/boss_05_lava.glb` | #6 Raja Lava |
+| `models/boss_06_titan.glb` | #7 Titan Emas |
+| `models/boss_07_wizard.glb` | #8 Penyihir Bayangan |
+| `models/boss_08_hydra.glb` | #9 Hydra Kristal |
+| `models/boss_09_doom.glb` | #10 Dewa Kehancuran |
+| `models/giant_00_ape.glb` | Kera raksasa |
+| `models/giant_01_robot.glb` | Robot |
+| `models/giant_02_dragon.glb` | Naga |
+| `models/giant_03_ogre.glb` | Oni |
+| `models/giant_04_dino.glb` | Dino |
+| `models/giant_05_octopus.glb` | Gurita |
 
-> Monster ini muncul saat kamu menjawab soal dengan benar, lalu berjalan dan
-> **menghantam kerumunan musuh (AoE slam + shockwave)** secara otomatis.
-> Gambar PNG-mu juga diubah menjadi **3D voxel** (bukan tempelan gambar datar),
-> lengkap dengan animasi langkah & hantaman.
+Ketentuan model agar hasil rapi:
+- Format **`.glb`** (bukan `.fbx`/`.obj`), satu monster per file, menghadap **-Z**
+  (standar three.js), berdiri di y = 0, ukuran bebas (diskalakan otomatis).
+- Kalau ada animasi, klip bernama `walk`/`run` dan `attack`/`hit`/`punch`/`slam`
+  akan dipakai otomatis; klip pertama dipakai sebagai gerakan diam.
+- Batas ukuran file disarankan **< 15 MB** agar HP tidak berat.
+
+> PNG monster (`boss_XX_*.png`, `giant_XX_*.png`) **tidak lagi dipakai** oleh game —
+> silakan hapus dari folder ini. Foto 2D memang tidak bisa menjadi monster 3D yang mulus.
 
 ## 🧍 Unit kecil (opsional, cadangan)
 
@@ -94,7 +91,7 @@ Tips MP3:
 
 ## ✅ Cara cek
 
-1. Taruh file, misal `public/assets/logo.png` dan `public/assets/boss_06_titan.png`.
+1. Taruh file, misal `public/assets/logo.png` atau model `public/assets/models/boss_06_titan.glb`.
 2. Rebuild / refresh halaman.
 3. Logo muncul di menu, Titan Emas tampil sebagai gambarmu di level 7
    dan tetap bisa meraung + menghantam.
