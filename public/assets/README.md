@@ -43,11 +43,14 @@ Kalau ingin memakai model buatan sendiri (Blender/Mixamo/Sketchfab), taruh file
 | `models/giant_05_octopus.glb` | Gurita |
 
 Ketentuan model agar hasil rapi:
-- Format **`.glb`** (bukan `.fbx`/`.obj`), satu monster per file, menghadap **-Z**
-  (standar three.js), berdiri di y = 0, ukuran bebas (diskalakan otomatis).
-- Kalau ada animasi, klip bernama `walk`/`run` dan `attack`/`hit`/`punch`/`slam`
-  akan dipakai otomatis; klip pertama dipakai sebagai gerakan diam.
-- Batas ukuran file disarankan **< 15 MB** agar HP tidak berat.
+- Format **`.glb`** (bukan `.fbx`/`.obj`), satu monster per file. Ukuran dan posisi kaki
+  dinormalisasi otomatis. Arah depan **tidak universal**; bawaan dianggap +Z dan dapat
+  diperbaiki +Z/-Z/+X/-X melalui halaman Pemeriksa GLB.
+- Animasi harus benar-benar masuk ke GLB. Nama `Walk`/`Run`/`Jalan` dan
+  `Attack`/`Serang`/`Pukul` dikenali otomatis. Jangan anggap klip pertama sebagai serang.
+- Bila jalan+serang menjadi satu timeline, gunakan rentang waktu di Pemeriksa GLB.
+- Batas ukuran file disarankan **< 15 MB** agar HP tidak berat. Panduan lengkap:
+  `public/assets/models/README.md`.
 
 > PNG monster (`boss_XX_*.png`, `giant_XX_*.png`) **tidak lagi dipakai** oleh game —
 > silakan hapus dari folder ini. Foto 2D memang tidak bisa menjadi monster 3D yang mulus.

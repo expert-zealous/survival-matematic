@@ -11,6 +11,8 @@ const files = process.argv.slice(2).filter((arg) => arg !== "--strict");
 const strict = process.argv.includes("--strict");
 const paths = files.length ? files.map((f) => resolve(f)) : existsSync(dir) ? readdirSync(dir).filter((f) => /\.(glb|gltf)$/i.test(f)).map((f) => resolve(dir, f)) : [];
 let failures = 0;
+let mapping = {};
+try { mapping = JSON.parse(readFileSync(resolve(dir, "animation-map.json"), "utf8")); } catch {}
 for (const path of paths) {
   try {
     const bytes = readFileSync(path);
@@ -35,8 +37,17 @@ for (const path of paths) {
       const end = Math.max(...times.map((a) => a?.max?.[0] ?? 0));
       console.log(`  [${i}] ${clip.name ?? "(tanpa nama)"} | ${(Number.isFinite(end) ? end - start : 0).toFixed(2)}s | ${clip.channels?.length ?? 0} kanal | mulai ${Number.isFinite(start) ? start : "?"}s`);
     });
-    const attack = clips.some((c) => /attack|serang|pukul|punch|slam|hantam|strike|bite|smash|swipe|kick/i.test(c.name ?? ""));
-    const walk = clips.some((c) => /walk|jalan|run|lari|march|move|crawl/i.test(c.name ?? ""));
+    const config = mapping[basename(path)] ?? {};
+    const mappedWalk = config.clips?.walk ?? config.ranges?.walk?.clip;
+    const mappedAttack = config.clips?.attack ?? config.ranges?.attack?.clip;
+    const names = new Set(clips.map((c) => c.name ?? ""));
+    const attack = mappedAttack ? names.has(mappedAttack) : clips.some((c) => /attack|serang|pukul|punch|slam|hantam|strike|bite|smash|swipe|kick/i.test(c.name ?? ""));
+    const walk = mappedWalk ? names.has(mappedWalk) : clips.some((c) => /walk|jalan|run|lari|march|move|crawl/i.test(c.name ?? ""));
+    if (mappedWalk || mappedAttack) console.log(`  mapping: jalan=${mappedWalk ?? "otomatis"}, serang=${mappedAttack ?? "otomatis"}`);
+    for (const [role, range] of Object.entries(config.ranges ?? {})) {
+      const clip = clips.find((c) => c.name === range.clip);
+      if (!clip || !(range.start >= 0 && range.end > range.start)) { failures++; console.log(`  ERROR mapping rentang ${role} tidak valid`); }
+    }
     if (!attack || !walk) {
       failures++;
       console.log("  PERIKSA: nama Walk/Attack belum lengkap. Buka Pemeriksa GLB di menu game untuk memilih klip yang benar.");

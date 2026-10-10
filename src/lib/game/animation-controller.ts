@@ -1,9 +1,14 @@
 import * as THREE from "three";
+import { AnimationUtils } from "three";
 
 export type AnimationRole = "idle" | "walk" | "attack" | "roar" | "death";
 export type ClipMap = Partial<Record<AnimationRole, string>>;
+export interface ClipRange { clip: string; start: number; end: number }
+export type ClipRanges = Partial<Record<AnimationRole, ClipRange>>;
 export interface ModelSettings {
   clips?: ClipMap;
+  /** Split one combined Blender/NLA timeline into semantic clips (seconds). */
+  ranges?: ClipRanges;
   /** Arah wajah di FILE, sebelum dinormalkan menjadi -Z lokal game. */
   forward?: "+Z" | "-Z" | "+X" | "-X";
   trimPadding?: boolean;
@@ -95,6 +100,18 @@ function valueDiff(track: THREE.KeyframeTrack, a: number, b: number): number {
   return diff;
 }
 
+
+/** Extract a role from one combined clip using second ranges entered in the inspector. */
+export function rangeClip(source: THREE.AnimationClip, role: AnimationRole, range?: ClipRange): THREE.AnimationClip {
+  if (!range) return source;
+  const start = Math.max(0, Math.min(source.duration - 1 / 30, range.start));
+  const end = Math.max(start + 1 / 30, Math.min(source.duration, range.end));
+  const fps = 60;
+  const result = AnimationUtils.subclip(source, `${source.name} [${role}]`, Math.floor(start * fps), Math.ceil(end * fps) + 1, fps);
+  if (!result.tracks.length) return source;
+  return result;
+}
+
 /** Remove NLA common leading/trailing hold, retaining every moving keyframe and static track. */
 export function prepareClip(source: THREE.AnimationClip, trimPadding = true): THREE.AnimationClip {
   const clip = source.clone();
@@ -145,10 +162,18 @@ export class MonsterAnimationController {
 
   constructor(private root: THREE.Object3D, source: THREE.AnimationClip[], settings: ModelSettings = {}) {
     this.mixer = new THREE.AnimationMixer(root);
-    this.selection = resolveClips(source, settings.clips);
+    const overrides = { ...settings.clips };
+    for (const role of ROLES) {
+      const range = settings.ranges?.[role];
+      if (range?.clip) overrides[role] = range.clip;
+    }
+    this.selection = resolveClips(source, overrides);
     for (const role of ROLES) {
       const clip = this.selection.clips[role];
-      if (clip) this.actions.set(role, this.mixer.clipAction(prepareClip(clip, settings.trimPadding !== false)));
+      if (clip) {
+        const ranged = rangeClip(clip, role, settings.ranges?.[role]);
+        this.actions.set(role, this.mixer.clipAction(settings.ranges?.[role] ? ranged : prepareClip(ranged, settings.trimPadding !== false)));
+      }
     }
     this.mixer.addEventListener("finished", this.onFinished);
     this.transition("walk", false);

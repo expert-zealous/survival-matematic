@@ -644,7 +644,8 @@ export class GameEngine {
     const fill = Math.min(1, BALANCE.waveBudget(L, ref) / (BALANCE.waveSize(L) * gp));
     const oldCount = Math.max(1, Math.round(BALANCE.waveSize(L) * mult * fill * (this.boss.hp > 0 && this.boss.enraged ? 1.5 : 1)));
     // More bodies, not more HP: divide the previous wave budget over complete rows.
-    const members = planFormation(oldCount * gp, Math.max(FORMATION_COLUMNS, oldCount * 1.3), {
+    // At least three complete rows are visible at every level; HP budget is unchanged and divided over them.
+    const members = planFormation(oldCount * gp, Math.max(FORMATION_COLUMNS * 3, oldCount * 2.5), {
       rush: sp.includes("rush"), elite: sp.includes("elite"), allowElite: L >= 6,
     });
     for (let i = 0; i < members.length; i += FORMATION_COLUMNS) {
@@ -803,8 +804,8 @@ export class GameEngine {
       const march = b.speed * (b.enraged ? 1.45 : 1) * wdt;
       b.y -= march;
       b.walkPhase += wdt * (b.enraged ? 7 : 4.5); // monster raksasa melangkah lebih berat
-      // goyang kiri-kanan seperti monster berjalan
-      b.x = 0.5 + Math.sin(this.elapsed * 0.55) * 0.13;
+      // Bos tetap di tengah jalur. Goyangan visual ditangani rig, bukan menggeser collider/sepatu melintasi pagar.
+      b.x = 0.5;
       // bos berhenti di GARIS DEPAN lalu bertarung di sana (tidak menggebuki benteng);
       // ancaman ke benteng datang dari pasukan yang lolos — makin lama duel, makin deras
       const holdLine = b.isBoss ? 0.4 : 0.5;
@@ -915,10 +916,10 @@ export class GameEngine {
         this.addFloat(b.x, Math.min(0.95, b.y + 0.08), b.attackKind === "slam" ? "💥 HANTAMAN BOS!" : "🦶 INJAKAN BOS!", "#fca5a5", 22);
         play("slam");
         // jeda berikutnya — makin tinggi level makin sering
-        const base = Math.max(3.6, 7 - Math.min(30, this.level) * 0.1 - (b.enraged ? 1.2 : 0));
-        const early = this.level <= 3 ? 1.5 : 1; // level awal: bos menghantam lebih jarang
-        const minor = b.isBoss ? 1 : 1.35; // bos sebelum bos akhir menghantam lebih jarang
-        b.attackCd = base * early * minor * rnd(0.85, 1.15);
+        // Walk → Attack → Walk repeats visibly throughout the fight (roughly every 4–6 s).
+        const base = Math.max(3.2, 5 - Math.min(30, this.level) * 0.04 - (b.enraged ? 0.7 : 0));
+        const minor = b.isBoss ? 1 : 1.1;
+        b.attackCd = base * minor * rnd(0.9, 1.1);
       }
       return;
     }
@@ -1310,7 +1311,7 @@ export class GameEngine {
       enraged: false,
       hitFlash: 0,
       attackT: 0,
-      attackCd: isBoss ? 4 : 5.5,
+      attackCd: 1.25, // serangan pertama cepat agar gerak Attack selalu terlihat sebelum bos tumbang
       attackKind: "slam",
       warnT: 0,
       x: 0.5,

@@ -38,7 +38,11 @@ export default function ModelCheck() {
   const versionRef = useRef(0);
   const playback = useRef({ playing, mode, team, eventVersion });
   playback.current = { playing, mode, team, eventVersion };
-  const selection = template ? resolveClips(template.animations, settings.clips) : null;
+  const selection = template ? (() => {
+    const overrides = { ...settings.clips };
+    for (const role of ROLES) if (settings.ranges?.[role]?.clip) overrides[role] = settings.ranges[role]!.clip;
+    return resolveClips(template.animations, overrides);
+  })() : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -204,7 +208,28 @@ export default function ModelCheck() {
               <h2 className="font-black">Pemetaan animasi</h2>
               <p className="mb-3 mt-1 text-xs text-slate-400">Gunakan ini jika nama klip masih NlaTrack/ArmatureAction. Jangan tebak hanya dari urutannya.</p>
               <div className="space-y-2">
-                {ROLES.map((role) => <label key={role} className="grid grid-cols-[70px_1fr] items-center gap-2 text-xs"><span>{LABEL[role]}</span><select disabled={!template} value={settings.clips?.[role] ?? "__auto__"} onChange={(e) => { const clips = { ...settings.clips }; if (e.target.value === "__auto__") delete clips[role]; else clips[role] = e.target.value; setSettings({ ...settings, clips }); setSaved(false); }} className="w-full min-w-0 rounded-lg border border-white/10 bg-slate-800 p-2"><option value="__auto__">Otomatis {selection?.names[role] ? `→ ${selection.names[role]}` : ""}</option><option value="">Tidak tersedia</option>{template?.animations.map((c, i) => <option key={i} value={c.name}>{c.name}</option>)}</select></label>)}
+                {ROLES.map((role) => {
+                  const mapped = settings.ranges?.[role];
+                  const selected = mapped?.clip ?? settings.clips?.[role] ?? selection?.names[role] ?? template?.animations[0]?.name ?? "";
+                  const selectedClip = template?.animations.find((c) => c.name === selected);
+                  return (
+                    <div key={role} className="rounded-lg border border-white/10 bg-white/[.03] p-2">
+                      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-xs"><span>{LABEL[role]}</span><select disabled={!template} value={mapped?.clip ?? settings.clips?.[role] ?? "__auto__"} onChange={(e) => {
+                        const clips = { ...settings.clips }; const ranges = { ...settings.ranges };
+                        if (e.target.value === "__auto__") delete clips[role]; else clips[role] = e.target.value;
+                        if (ranges[role]) ranges[role] = { ...ranges[role]!, clip: e.target.value === "__auto__" ? (selection?.names[role] ?? "") : e.target.value };
+                        setSettings({ ...settings, clips, ranges }); setSaved(false);
+                      }} className="w-full min-w-0 rounded-lg border border-white/10 bg-slate-800 p-2"><option value="__auto__">Otomatis {selection?.names[role] ? `→ ${selection.names[role]}` : ""}</option><option value="">Tidak tersedia</option>{template?.animations.map((c, i) => <option key={i} value={c.name}>{c.name}</option>)}</select></label>
+                      <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-300"><input type="checkbox" disabled={!selectedClip} checked={Boolean(mapped)} onChange={(e) => {
+                        const ranges = { ...settings.ranges };
+                        if (e.target.checked && selectedClip) ranges[role] = { clip: selectedClip.name, start: 0, end: selectedClip.duration };
+                        else delete ranges[role];
+                        setSettings({ ...settings, ranges }); setSaved(false);
+                      }} />Ambil rentang waktu dari satu klip gabungan</label>
+                      {mapped && selectedClip && <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><label>Mulai (detik)<input type="number" min="0" max={mapped.end - 0.03} step="0.01" value={mapped.start} onChange={(e) => { const ranges = { ...settings.ranges, [role]: { ...mapped, start: Math.max(0, Number(e.target.value)) } }; setSettings({ ...settings, ranges }); setSaved(false); }} className="mt-1 w-full rounded bg-slate-800 p-2" /></label><label>Selesai (detik)<input type="number" min={mapped.start + 0.03} max={selectedClip.duration} step="0.01" value={mapped.end} onChange={(e) => { const ranges = { ...settings.ranges, [role]: { ...mapped, end: Math.min(selectedClip.duration, Number(e.target.value)) } }; setSettings({ ...settings, ranges }); setSaved(false); }} className="mt-1 w-full rounded bg-slate-800 p-2" /></label></div>}
+                    </div>
+                  );
+                })}
                 <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-xs"><span>Depan file</span><select value={settings.forward ?? "+Z"} onChange={(e) => setSettings({ ...settings, forward: e.target.value as ModelSettings["forward"] })} className="rounded-lg border border-white/10 bg-slate-800 p-2">{["+Z", "-Z", "+X", "-X"].map((v) => <option key={v}>{v}</option>)}</select></label>
                 <label className="flex items-center gap-2 pt-2 text-xs"><input type="checkbox" checked={settings.trimPadding !== false} onChange={(e) => setSettings({ ...settings, trimPadding: e.target.checked })} />Pangkas jeda kosong di awal/akhir NLA</label>
               </div>

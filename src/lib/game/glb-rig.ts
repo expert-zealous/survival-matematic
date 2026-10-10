@@ -4,7 +4,7 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { MODEL_DIR } from "./assets";
-import { MonsterAnimationController, type ModelSettings, type AnimationRole } from "./animation-controller";
+import { MonsterAnimationController, type ModelSettings, type AnimationRole, type ClipRange } from "./animation-controller";
 import type { MonsterRig, RigPose } from "./models";
 
 export interface GlbTemplate {
@@ -12,6 +12,7 @@ export interface GlbTemplate {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
   rawHeight: number;
+  rawWidth: number;
   center: THREE.Vector3;
   minY: number;
 }
@@ -39,6 +40,7 @@ export function prepareGlbTemplate(gltf: Pick<GLTF, "scene" | "animations">, url
   });
   return {
     url, scene: gltf.scene, animations: gltf.animations ?? [], rawHeight,
+    rawWidth: Math.max(1e-8, bounds.max.x - bounds.min.x),
     center: bounds.getCenter(new THREE.Vector3()), minY: bounds.min.y,
   };
 }
@@ -90,6 +92,15 @@ export function loadAnimationSettings(): Promise<Record<string, ModelSettings>> 
             if (typeof name === "string") config.clips[role] = name;
           }
         }
+        if (v.ranges && typeof v.ranges === "object" && !Array.isArray(v.ranges)) {
+          config.ranges = {};
+          for (const role of ["walk", "idle", "attack", "roar", "death"] as AnimationRole[]) {
+            const raw = (v.ranges as Record<string, unknown>)[role];
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+            const range = raw as Partial<ClipRange>;
+            if (typeof range.clip === "string" && typeof range.start === "number" && typeof range.end === "number" && range.end > range.start) config.ranges[role] = { clip: range.clip, start: range.start, end: range.end };
+          }
+        }
         result[key] = config;
       }
       return result;
@@ -99,14 +110,16 @@ export function loadAnimationSettings(): Promise<Record<string, ModelSettings>> 
 
 const reports = new Set<string>();
 /** Every call owns its skeleton and mixer. Cached geometry/materials are never destroyed by an instance. */
-export function wrapGlb(data: GlbTemplate, targetSize: number, settings: ModelSettings = {}): MonsterRig {
+export function wrapGlb(data: GlbTemplate, targetSize: number, settings: ModelSettings = {}, maxWidth = 5.2): MonsterRig {
   const group = new THREE.Group();
   const motion = new THREE.Group(); // world-size procedural fallback, never changes imported mesh/skeleton
   const orientation = new THREE.Group();
   const normalizer = new THREE.Group();
   const offset = new THREE.Group();
   const clone = cloneSkeleton(data.scene) as THREE.Group;
-  normalizer.scale.setScalar(targetSize / data.rawHeight); // preserves original imported root transforms
+  const scaleY = targetSize / data.rawHeight;
+  const scaleX = Math.min(scaleY, maxWidth / data.rawWidth); // feet/body stay within the road without shrinking height
+  normalizer.scale.set(scaleX, scaleY, scaleY); // preserves original imported root transforms
   offset.position.set(-data.center.x, -data.minY, -data.center.z);
   const correction = { "+Z": Math.PI, "-Z": 0, "+X": Math.PI / 2, "-X": -Math.PI / 2 };
   orientation.rotation.y = correction[settings.forward ?? "+Z"];

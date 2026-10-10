@@ -51,6 +51,25 @@ check("NLA long leading/trailing holds trimmed on a CLONE", () => {
   assert.equal(prepareClip(input, false).duration, 20);
 });
 
+check("one combined NLA clip can be split into Walk and Attack time ranges", () => {
+  const a = actor();
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.2, 0, 0));
+  const combined = new THREE.AnimationClip("Goblin_All", 2, [
+    new THREE.QuaternionKeyframeTrack("Leg.quaternion", [0, 0.5, 1, 1.5, 2], [0,0,0,1, ...q.toArray(), 0,0,0,1, 0,0,0,1, 0,0,0,1]),
+    new THREE.QuaternionKeyframeTrack("Arm.quaternion", [0, 0.5, 1, 1.5, 2], [0,0,0,1, 0,0,0,1, 0,0,0,1, ...q.toArray(), 0,0,0,1]),
+  ]);
+  const ctl = new MonsterAnimationController(a.root, [combined], { ranges: {
+    walk: { clip: "Goblin_All", start: 0, end: 1 },
+    attack: { clip: "Goblin_All", start: 1, end: 2 },
+  } });
+  let maxArm = 0;
+  for (let i = 0; i < 80; i++) {
+    ctl.update(1 / 60, { role: i < 50 ? "attack" : "walk", id: 1, duration: 0.8 });
+    maxArm = Math.max(maxArm, Math.abs(a.arm.rotation.x));
+  }
+  assert.ok(maxArm > 0.8); assert.equal(ctl.currentRole, "walk"); ctl.dispose();
+});
+
 check("walk → FULL attack → walk repeats 15 times without being swallowed", () => {
   const a = actor();
   const ctl = new MonsterAnimationController(a.root, [rotationClip("Walk", "Leg"), rotationClip("Attack", "Arm"), rotationClip("Roar", "Arm")]);
@@ -127,7 +146,7 @@ interface Harness {
   enemies: { x: number; y: number; r: number; power: number }[];
   units: { y: number }[];
   enemyRows: FormationMember[][];
-  boss: { hp: number; warnT: number; attackT: number; actionId: number; attackKind: string; id: number; attackCd: number };
+  boss: { hp: number; maxHp: number; x: number; warnT: number; attackT: number; actionId: number; attackKind: string; id: number; attackCd: number };
   spawnWave: (n?: number) => void; updateEnemyEntrance: (dt: number) => void;
   updateStage: (dt: number) => void; updateSpecials: (dt: number) => void;
   updateBossCombat: (dt: number) => void; updateUnits: (dt: number) => void;
@@ -138,6 +157,7 @@ check("real engine emits rows at gate; queued enemies block stage completion bey
   const engine = new GameEngine({} as HTMLCanvasElement, { startLevel: 1, rankIndex: 0 }, { onHud: () => {}, onGameOver: () => {}, onBossDefeated: () => { cleared++; } });
   const e = engine as unknown as Harness; e.phase = "play";
   e.spawnWave(1); assert.ok(e.enemyRows.length > 0);
+  assert.ok(e.enemyRows.reduce((n, row) => n + row.length, 0) >= 30, "minimum three full rows queue at the red gate");
   e.updateEnemyEntrance(0.5);
   assert.equal(e.enemies.length, FORMATION_COLUMNS);
   assert.ok(e.enemies.every((enemy) => enemy.y === ENEMY_ENTRY_Y));
@@ -148,6 +168,18 @@ check("real engine emits rows at gate; queued enemies block stage completion bey
   e.updateStage(120); assert.equal(e.phase, "play"); assert.equal(cleared, 0);
   e.updateSpecials(15); assert.equal(e.enemyRows.length, 1, "no ambush spawns after last boss death");
   e.enemyRows = []; e.updateStage(0.01); assert.equal(e.phase, "clear"); assert.equal(cleared, 1);
+});
+
+check("boss repeats attacks until death and never wanders sideways outside its lane", () => {
+  const engine = new GameEngine({} as HTMLCanvasElement, { startLevel: 1, rankIndex: 0 }, { onHud: () => {}, onGameOver: () => {}, onBossDefeated: () => {} });
+  const e = engine as unknown as Harness;
+  e.phase = "play"; e.enterChampion(); e.boss.hp = e.boss.maxHp = 1e12;
+  const ids = new Set<number>();
+  for (let frame = 0; frame < 60 * 35; frame++) {
+    e.updateBossCombat(1 / 60); ids.add(e.boss.actionId);
+    assert.equal((e.boss as unknown as { x: number }).x, 0.5);
+  }
+  assert.ok(ids.size >= 5, `expected repeated attacks, got ${ids.size - 1}`);
 });
 
 check("boss attack ID is stable from windup to hit, then changes for next attack", () => {
