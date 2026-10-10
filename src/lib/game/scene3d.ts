@@ -17,8 +17,9 @@ const LANE_LEN = 20.5;
 // Jalan diperpanjang jauh melewati posisi awal monster supaya SEMUA musuh & horde
 // selalu berdiri di atas aspal (sebelumnya jalan berhenti di z≈-18).
 // Ukuran monster (pengali dari ukuran dasar). Bos menjulang jauh lebih tinggi dari pasukan.
-const MONSTER_SIZE = 2.2; // bos & penjaga
-const GIANT_SIZE = 1.6; // raksasa milik pemain
+// Ukuran monster raksasa: gagah dan menjulang tinggi di atas pasukan (~9–12x tinggi prajurit)
+const MONSTER_SIZE = 6.4; // bos & penjaga
+const GIANT_SIZE = 5.4; // raksasa milik pemain
 const LANE_FRONT_Z = 10; // ujung dekat pemain
 const LANE_END_Z = -34; // ujung jauh (belakang horde)
 const Z0 = 5.6; // world z of game-y = 0 (player line)
@@ -1195,12 +1196,12 @@ export class Scene3D {
    * Ambil monster 3D: bila ada file .glb di public/assets/models gunakan itu (model asli),
    * bila tidak pakai rig prosedural ber-sendi (mulus, bukan hasil pikselisasi PNG).
    */
-  private requestModel(glbUrl: string | null, fallback: () => MonsterRig, cb: (rig: MonsterRig) => void) {
+  private requestModel(glbUrl: string | null, targetSize: number, fallback: () => MonsterRig, cb: (rig: MonsterRig) => void) {
     if (!glbUrl) {
       cb(fallback());
       return;
     }
-    void loadGlb(glbUrl).then((data) => cb(data ? wrapGlb(data, 1, 1) : fallback()));
+    void loadGlb(glbUrl).then((data) => cb(data ? wrapGlb(data, targetSize) : fallback()));
   }
 
   /** Ambil rig bos dari cache (untuk dipakai bergantian) atau buat baru. */
@@ -1238,12 +1239,14 @@ export class Scene3D {
       holder.add(slot.rig.group);
       const glb = MODEL_FILES.giant(slot.giantIndex);
       if (glb) {
-        this.requestModel(glb, () => buildGiantRig(slot.giantIndex, GIANT_SIZE), (rig) => {
+        this.requestModel(glb, GIANT_SIZE, () => buildGiantRig(slot.giantIndex, GIANT_SIZE), (rig: MonsterRig) => {
           if (slot.modelIdx !== slot.giantIndex || !slot.holder) return;
-          holder.remove(slot.rig!.group);
-          slot.rig!.dispose();
+          if (slot.rig) {
+            slot.holder.remove(slot.rig.group);
+            slot.rig.dispose();
+          }
           slot.rig = rig;
-          holder.add(slot.rig.group);
+          slot.holder.add(slot.rig.group);
         });
       }
     }
@@ -1277,10 +1280,12 @@ export class Scene3D {
           slot.holder!.add(slot.rig.group);
           const glb2 = MODEL_FILES.giant(newIdx);
           if (glb2) {
-            this.requestModel(glb2, () => buildGiantRig(newIdx, GIANT_SIZE), (rig2) => {
+            this.requestModel(glb2, GIANT_SIZE, () => buildGiantRig(newIdx, GIANT_SIZE), (rig2: MonsterRig) => {
               if (slot.modelIdx !== newIdx || !slot.holder) return;
-              slot.holder.remove(slot.rig!.group);
-              slot.rig!.dispose();
+              if (slot.rig) {
+                slot.holder.remove(slot.rig.group);
+                slot.rig.dispose();
+              }
               slot.rig = rig2;
               slot.holder.add(slot.rig.group);
             });
@@ -1390,10 +1395,10 @@ export class Scene3D {
     // ── POSISI BERJALAN: bos tidak lagi di panggung, melainkan di jalur ──
     const bp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
     // ── monster 3D (rig ber-sendi, atau file .glb bila pemain menyediakannya) ──
+    const bossBaseSize = MONSTER_SIZE;
     if (idx !== this.bossModelIdx) {
       this.bossModelIdx = idx;
       if (this.bossModel) {
-        this.scene.remove(this.bossModel.group);
         this.bossModel.dispose();
         this.bossModel = null;
       }
@@ -1406,14 +1411,16 @@ export class Scene3D {
       holder.rotation.y = Math.PI;
       this.scene.add(holder);
       this.bossHolder = holder;
-      this.bossModel = this.makeBossRig(idx, MONSTER_SIZE);
+      this.bossModel = this.makeBossRig(idx, bossBaseSize);
       holder.add(this.bossModel.group);
       const glb = MODEL_FILES.boss(idx);
       if (glb) {
-        this.requestModel(glb, () => this.makeBossRig(idx, MONSTER_SIZE), (rig) => {
+        this.requestModel(glb, bossBaseSize, () => this.makeBossRig(idx, bossBaseSize), (rig: MonsterRig) => {
           if (this.bossModelIdx !== idx || !this.bossHolder) return;
-          this.bossHolder.remove(this.bossModel!.group);
-          this.bossModel!.dispose();
+          if (this.bossModel) {
+            this.bossHolder.remove(this.bossModel.group);
+            this.bossModel.dispose();
+          }
           this.bossModel = rig;
           this.bossHolder.add(this.bossModel.group);
         });
@@ -1426,6 +1433,10 @@ export class Scene3D {
     const rig = this.bosses[idx];
     const tierScale = 1 + (f.bossTier - 1) * 0.1;
     const champScale = f.champScale ?? 1;
+    const totalScale = tierScale * champScale;
+    if (this.bossHolder) {
+      this.bossHolder.scale.setScalar(totalScale);
+    }
     // ── ANIMASI JALAN + SERANG BOS ──
     const atk = Math.max(0, Math.min(1, (f.bossAttackT ?? 0) / 0.8));
     const kind = f.bossAttackKind ?? "slam";
@@ -1442,12 +1453,9 @@ export class Scene3D {
     const lungeZ = slam * 0.9; // menghantam ke arah pemain (+Z)
     const baseScale = Number(rig.group.userData.baseScale ?? 1);
     // tinggi badan monster → tanda seru, bar HP, dan angka HP melayang tepat di atas kepala
-    const bodyH =
-      useRig && this.bossModel
-        ? this.bossModel.height * tierScale * champScale
-        : 2.4 * baseScale * 1.45 * MONSTER_SIZE * tierScale * champScale;
-    const headY = bodyH + 0.9;
-    const labelK = 0.9 + 0.5 * champScale; // label bos lebih besar daripada label penjaga
+    const bodyH = (useRig && this.bossModel ? this.bossModel.height : MONSTER_SIZE) * totalScale;
+    const headY = bodyH + 1.2;
+    const labelK = 1.0 + 0.4 * champScale; // label bos lebih besar daripada label penjaga
     if (this.bossModel && this.bossHolder) {
       // wadah (sudah menghadap pemain) hanya diposisikan; sendi dianimasikan rig → mulus
       this.bossHolder.position.set(bp.x + roarShake, Math.max(0, walkBob * 0.55 + idleBob - crouch * 0.35), bp.z + lungeZ * 0.5);

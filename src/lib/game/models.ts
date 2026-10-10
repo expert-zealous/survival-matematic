@@ -18,6 +18,9 @@
 // ─────────────────────────────────────────────────────────────
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 export interface RigPose {
   time: number;
@@ -746,86 +749,237 @@ function scaleRig(rig: MonsterRig, size: number): MonsterRig {
 }
 
 // ── FILE 3D ASLI (.glb / .gltf) ────────────────────────────
-const loader = typeof window !== "undefined" ? new GLTFLoader() : null;
-const glbCache = new Map<string, Promise<{ url: string; scene: THREE.Group; mixer: THREE.AnimationMixer | null; actions: THREE.AnimationAction[]; height: number } | null>>();
+let gltfLoaderInstance: GLTFLoader | null = null;
 
-function measure(obj: THREE.Object3D) {
-  obj.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(obj);
-  return Math.max(0.001, box.max.y - box.min.y);
+function getLoader(): GLTFLoader | null {
+  if (typeof window === "undefined") return null;
+  if (gltfLoaderInstance) return gltfLoaderInstance;
+  gltfLoaderInstance = new GLTFLoader();
+  try {
+    const draco = new DRACOLoader();
+    draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.7/");
+    gltfLoaderInstance.setDRACOLoader(draco);
+  } catch {}
+  try {
+    gltfLoaderInstance.setMeshoptDecoder(MeshoptDecoder);
+  } catch {}
+  return gltfLoaderInstance;
 }
 
+export interface GlbTemplate {
+  url: string;
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+  rawHeight: number;
+  center: THREE.Vector3;
+  minY: number;
+}
+
+const glbCache = new Map<string, Promise<GlbTemplate | null>>();
+
 /** Muat file .glb/.gltf; hasilnya di-cache. Kembalikan null bila gagal/tidak ada. */
-export function loadGlb(url: string) {
-  if (!loader) return Promise.resolve(null);
+export function loadGlb(url: string): Promise<GlbTemplate | null> {
+  const ldr = getLoader();
+  if (!ldr) return Promise.resolve(null);
   let p = glbCache.get(url);
   if (!p) {
     p = new Promise((resolve) => {
-      loader.load(
-        url,
-        (gltf: GLTF) => {
-          const scene = gltf.scene;
-          const height = measure(scene);
-          const mixer = gltf.animations.length ? new THREE.AnimationMixer(scene) : null;
-          const actions = mixer ? gltf.animations.map((a) => mixer.clipAction(a)) : [];
-          if (actions.length) actions[0].play();
-          resolve({ url, scene, mixer, actions, height });
-        },
-        undefined,
-        () => resolve(null),
-      );
+      fetch(url, { method: "HEAD" })
+        .then((res) => {
+          const type = res.headers.get("content-type") ?? "";
+          if (!res.ok || type.includes("text/html")) {
+            resolve(null);
+            return;
+          }
+          ldr.load(
+            url,
+            (gltf: GLTF) => {
+              const scene = gltf.scene;
+              scene.updateMatrixWorld(true);
+              const box = new THREE.Box3().setFromObject(scene);
+              const size = box.getSize(new THREE.Vector3());
+              const center = box.getCenter(new THREE.Vector3());
+              const rawHeight = Math.max(0.001, size.y);
+              // Setup material & shadows
+              scene.traverse((o) => {
+                const m = o as THREE.Mesh;
+                if (m.isMesh) {
+                  m.castShadow = true;
+                  m.receiveShadow = true;
+                  m.frustumCulled = false;
+                  const mats = Array.isArray(m.material) ? m.material : [m.material];
+                  for (const mat of mats) {
+                    const sm = mat as THREE.MeshStandardMaterial;
+                    if (sm.map) sm.map.colorSpace = THREE.SRGBColorSpace;
+                    if ("emissiveMap" in sm && sm.emissiveMap) sm.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+                  }
+                }
+              });
+              resolve({
+                url,
+                scene,
+                animations: gltf.animations ?? [],
+                rawHeight,
+                center,
+                minY: box.min.y,
+              });
+            },
+            undefined,
+            () => resolve(null),
+          );
+        })
+        .catch(() => resolve(null));
     });
     glbCache.set(url, p);
   }
   return p;
 }
 
-/** Bungkus hasil .glb agar bisa dianimasikan seperti rig biasa. */
+/** Bungkus hasil .glb agar berukuran raksasa dan beranimasi penuh. */
 export function wrapGlb(
-  data: { scene: THREE.Group; mixer: THREE.AnimationMixer | null; actions: THREE.AnimationAction[]; height: number },
-  targetHeight: number,
-  size: number,
+  data: GlbTemplate,
+  targetSize: number,
 ): MonsterRig {
   const group = new THREE.Group();
-  const k = (targetHeight * size) / data.height;
-  data.scene.scale.setScalar(k);
-  group.add(data.scene);
-  const attackIdx = data.actions.findIndex((a) => /attack|hit|punch|slam/i.test(a.getClip().name));
-  const walkIdx = data.actions.findIndex((a) => /walk|run|move/i.test(a.getClip().name));
-  let last = 0;
-  let current = -1;
+  const inner = new THREE.Group();
+
+  // Clone menggunakan cloneSkeleton agar aman bila ada beberapa monster menggunakan model sama:
+  const clone = cloneSkeleton(data.scene) as THREE.Group;
+
+  // Skala ke ukuran target (monster berukuran raksasa gagah):
+  const k = targetSize / data.rawHeight;
+
+  // Pusatkan di x=0, z=0 dan letakkan telapak kaki tepat di tanah y=0:
+  // Catatan: glTF standar menghadap +Z. Kita putar Math.PI agar depan menghadap -Z (sesuai rig internal game).
+  inner.position.set(-data.center.x * k, -data.minY * k, -data.center.z * k);
+  inner.scale.setScalar(k);
+  inner.rotation.y = Math.PI;
+  inner.add(clone);
+  group.add(inner);
+
+  const mixer = data.animations.length ? new THREE.AnimationMixer(clone) : null;
+  const attackClip = data.animations.find((a) => /attack|hit|punch|slam|strike|bite|smash|swipe/i.test(a.name));
+  const walkClip = data.animations.find((a) => /walk|run|move|locomot|stomp|march/i.test(a.name));
+  const roarClip = data.animations.find((a) => /roar|taunt|rage|scream|intro/i.test(a.name));
+  const idleClip = data.animations.find((a) => /idle|stand|breath|wait/i.test(a.name));
+
+  const attackAction = mixer && attackClip ? mixer.clipAction(attackClip) : null;
+  const walkAction = mixer && walkClip ? mixer.clipAction(walkClip) : (mixer && data.animations.length ? mixer.clipAction(data.animations[0]) : null);
+  const roarAction = mixer && roarClip ? mixer.clipAction(roarClip) : attackAction;
+  const idleAction = mixer && idleClip ? mixer.clipAction(idleClip) : walkAction;
+
+  let lastTime = 0;
   let disposed = false;
-  const pick = (want: number) => {
-    if (want === current) return;
-    current = want;
-    data.actions.forEach((a, i) => {
-      if (i === want) a.reset().fadeIn(0.15).play();
-      else if (a.isRunning()) a.fadeOut(0.2);
-    });
+  let activeAction: THREE.AnimationAction | null = null;
+  let oneShotRunning = false;
+
+  const playAction = (act: THREE.AnimationAction | null, once = false) => {
+    if (!act) return;
+    if (activeAction === act) {
+      if (once && !act.isRunning()) {
+        act.reset().play();
+      }
+      return;
+    }
+    if (activeAction) activeAction.fadeOut(0.2);
+    act.reset().fadeIn(0.15);
+    if (once) {
+      act.setLoop(THREE.LoopOnce, 1);
+      act.clampWhenFinished = true;
+      oneShotRunning = true;
+      const onFinished = () => {
+        oneShotRunning = false;
+        mixer?.removeEventListener("finished", onFinished);
+        if (walkAction) playAction(walkAction);
+      };
+      mixer?.addEventListener("finished", onFinished);
+    } else {
+      act.setLoop(THREE.LoopRepeat, Infinity);
+    }
+    act.play();
+    activeAction = act;
   };
+
+  if (walkAction) playAction(walkAction);
+
   return {
     group,
-    height: targetHeight * size,
-    animate(p) {
+    height: targetSize,
+    animate(p: RigPose) {
       if (disposed) return;
-      const dt = Math.max(0, Math.min(0.1, p.time - last));
-      last = p.time;
-      data.mixer?.update(dt);
-      if (data.actions.length) {
-        const want = p.slam > 0 || p.windup > 0 ? (attackIdx >= 0 ? attackIdx : 0) : walkIdx >= 0 ? walkIdx : 0;
-        pick(want);
+      const dt = Math.max(0, Math.min(0.1, p.time - lastTime));
+      lastTime = p.time;
+
+      if (mixer && data.animations.length) {
+        mixer.update(dt);
+        if (p.slam > 0 || p.windup > 0) {
+          if (!oneShotRunning && attackAction) playAction(attackAction, true);
+        } else if (p.enraged && roarAction && !oneShotRunning) {
+          playAction(roarAction, true);
+        } else if (!oneShotRunning && walkAction) {
+          playAction(walkAction);
+        }
       } else {
-        // tanpa animasi bawaan: animasikan sederhana (napas, langkah, hantam)
-        data.scene.rotation.x = -0.12 * p.windup + 0.3 * p.slam;
-        data.scene.position.y = Math.abs(Math.sin(p.walk)) * 0.03 * p.stride - 0.05 * p.windup;
-        data.scene.rotation.y = Math.sin(p.time * 1.2) * 0.05;
+        // ── ANIMASI PROSEDURAL DINAMIS UNTUK MODEL 3D GLB STATIS (TANPA SKELETON) ──
+        const h = targetSize;
+        const stride = p.stride;
+        const walk = p.walk;
+        const windup = p.windup;
+        const slam = p.slam;
+        const hit = p.hit;
+
+        // 1. Langkah Kaki / Berjalan (Stomp Bounce & Body Swagger):
+        // Hentakan kaki berat ke tanah:
+        const stomp = Math.abs(Math.sin(walk * 1.5)) * (h * 0.08) * stride;
+        // Goyang badan kiri-kanan (roll) saat melangkah:
+        const rollSway = Math.sin(walk * 1.5) * 0.12 * stride;
+        // Ayunan bahu kiri-kanan (yaw):
+        const yawSway = Math.cos(walk * 0.75) * 0.08 * stride;
+        // Condong maju saat berjalan:
+        const forwardLean = 0.09 * stride;
+
+        // 2. Serangan / Hantaman (Windup Angkat Badan & Slam Terjun):
+        // Windup: menarik badan ke belakang & meregangkan tubuh ke atas bersiap menghantam:
+        const windupPitch = -0.45 * windup;
+        const windupLift = (h * 0.14) * windup;
+        const windupStretchY = 1 + 0.18 * windup;
+        const windupThinXZ = 1 - 0.08 * windup;
+
+        // Slam: terjun menghantam ke depan dengan dahsyat!
+        const slamPitch = 0.75 * slam;
+        const slamLungeZ = -(h * 0.28) * slam; // lunge ke depan (-Z di lokal rig)
+        const slamDrop = -(h * 0.06) * slam;
+        const slamSquashY = 1 - 0.22 * slam;
+        const slamExpandXZ = 1 + 0.2 * slam;
+
+        // 3. Efek getaran saat meraung / marah:
+        const roarShake = p.enraged ? Math.sin(p.time * 40) * (h * 0.015) : 0;
+
+        // 4. Efek kena serangan (Flinch mundur):
+        const hitRecoilZ = (h * 0.12) * hit;
+        const hitPitch = -0.25 * hit;
+
+        // Posisi & rotasi wadah model GLB:
+        inner.position.x = -data.center.x * k + roarShake;
+        inner.position.y = -data.minY * k + stomp + windupLift + slamDrop;
+        inner.position.z = -data.center.z * k + slamLungeZ + hitRecoilZ;
+
+        inner.rotation.x = forwardLean + windupPitch + slamPitch + hitPitch;
+        inner.rotation.y = Math.PI + yawSway; // Math.PI memutar GLB (+Z depan) ke -Z depan!
+        inner.rotation.z = rollSway + (Math.sin(p.time * 2) * 0.015);
+
+        // Squash & Stretch:
+        inner.scale.set(
+          k * windupThinXZ * slamExpandXZ,
+          k * windupStretchY * slamSquashY,
+          k * windupThinXZ * slamExpandXZ
+        );
       }
-      void p.hit;
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      data.mixer?.stopAllAction();
+      mixer?.stopAllAction();
       disposeTree(group);
     },
   };
