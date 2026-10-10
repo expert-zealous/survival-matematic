@@ -4,6 +4,7 @@ import { BOSSES, RANKS, bossIndexForLevel, getRank, mapForLevel } from "@/lib/ga
 import { formatScore, type Profile, type SaveData } from "@/lib/storage";
 import { playMusic } from "@/lib/audio";
 import { Avatar, GameButton, RankBadge } from "./ui";
+import { STATIC_EXPORT, withBase } from "@/lib/base";
 import { GameLogo, MenuBackground } from "./GameLogo";
 import { BossIcon } from "./BossIcon";
 
@@ -138,6 +139,7 @@ export default function MainMenu({ profile, save, startLevel, onStartLevel, onPl
           )}
         </div>
 
+        <a href={withBase(STATIC_EXPORT ? "/model-check.html" : "/model-check")} className="mt-5 block rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-center text-xs font-bold text-sky-300">🛠 Pemeriksa GLB · uji jalan & serang</a>
         <div className="mt-auto pt-6 text-center text-[10px] text-slate-500">
           {save.games} permainan · {save.correct} jawaban benar · akurasi {save.correct + save.wrong > 0 ? Math.round((save.correct / (save.correct + save.wrong)) * 100) : 0}%
         </div>

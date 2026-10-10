@@ -9,20 +9,22 @@
 import * as THREE from "three";
 import type { MapTheme } from "./data";
 import { buildScenery, type Scenery } from "./scenery";
-import { buildBossRig, buildGiantRig, loadGlb, wrapGlb, type MonsterRig } from "./models";
+import { buildBossRig, buildGiantRig, loadGlb, wrapGlb, loadAnimationSettings, modelKey, type MonsterRig } from "./models";
+import type { AnimationRole } from "./animation-controller";
+import { LANE_WIDTH, LANE_LENGTH, PLAYER_Z, ROAD_FRONT_Z, ROAD_END_Z, RED_GATE_Z } from "./battlefield";
 import { MODEL_FILES } from "./assets";
 
-const LANE_W = 6.4;
-const LANE_LEN = 20.5;
+const LANE_W = LANE_WIDTH;
+const LANE_LEN = LANE_LENGTH;
 // Jalan diperpanjang jauh melewati posisi awal monster supaya SEMUA musuh & horde
 // selalu berdiri di atas aspal (sebelumnya jalan berhenti di z≈-18).
 // Ukuran monster (pengali dari ukuran dasar). Bos menjulang jauh lebih tinggi dari pasukan.
 // Ukuran monster raksasa: gagah dan menjulang tinggi di atas pasukan (~9–12x tinggi prajurit)
 const MONSTER_SIZE = 6.4; // bos & penjaga
 const GIANT_SIZE = 5.4; // raksasa milik pemain
-const LANE_FRONT_Z = 10; // ujung dekat pemain
-const LANE_END_Z = -34; // ujung jauh (belakang horde)
-const Z0 = 5.6; // world z of game-y = 0 (player line)
+const LANE_FRONT_Z = ROAD_FRONT_Z; // ujung dekat pemain
+const LANE_END_Z = ROAD_END_Z; // ujung jauh (belakang horde)
+const Z0 = PLAYER_Z; // world z of game-y = 0 (player line)
 
 export function worldOf(x: number, y: number) {
   return { x: (x - 0.5) * LANE_W, z: Z0 - y * LANE_LEN };
@@ -49,6 +51,7 @@ export interface FrameUnit {
   giantIndex: number;
   maxPower: number;
   attackT: number;
+  attackId?: number;
   lunge: number;
 }
 export interface FrameEnemy {
@@ -119,6 +122,10 @@ export interface RenderFrame {
   enraged: boolean;
   hitFlash: number;
   bossAttackT: number;
+  bossEntityId: number;
+  bossActionId: number;
+  bossAction: AnimationRole;
+  gatePulse: number;
   bossAttackKind: string;
   bossWarn: number;
   bossX: number;
@@ -622,16 +629,15 @@ export class Scene3D {
   private hitLight: THREE.PointLight;
 
   private giantSlots: {
-    emoji: string;
     giantIndex: number;
-    group: THREE.Group;
-    wings: THREE.Object3D[];
-    extras: THREE.Object3D[];
     label: THREE.Sprite;
-    rig: MonsterRig | null;
-    modelIdx: number;
-    holder: THREE.Group | null;
+    rig: MonsterRig;
+    holder: THREE.Group;
+    request: number;
   }[] = [];
+  private disposed = false;
+  private modelRequest = 0;
+  private redGateMaterial = stdMat(0xdc2626, 0.12, 0.38, 0x991b1b, 0.4);
   private floatPool: THREE.Sprite[] = [];
   private texCache = new Map<string, THREE.Texture>();
   private particleMesh: THREE.InstancedMesh;
@@ -918,18 +924,19 @@ export class Scene3D {
       this.scene.add(tower);
       part(this.scene, GEO.cone, stdMat(0xbfdbfe, 0.1, 0.4), x, 1.3, 9.25, 0.28, 0.38, 0.28);
     }
-    // enemy fortress behind the horde
-    const red = stdMat(0xb91c1c, 0.12, 0.45, 0x7f1d1d, 0.3);
-    const ewall = new THREE.Mesh(new THREE.BoxGeometry(LANE_W + 1.6, 1.1, 0.45), red);
-    ewall.position.set(0, 0.55, LANE_END_Z + 2.4);
-    ewall.castShadow = true;
-    this.scene.add(ewall);
-    for (const x of [-3.1, 3.1]) {
-      const tower = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2.1, 0.9), red);
-      tower.position.set(x, 1.05, LANE_END_Z + 2.3);
-      tower.castShadow = true;
-      this.scene.add(tower);
+    // Red fortress with an OPEN arch. The simulation emits soldiers through this exact Z.
+    const red = this.redGateMaterial;
+    for (const x of [-3.65, 3.65]) {
+      part(this.scene, GEO.box, red, x, 2.05, RED_GATE_Z, 0.75, 4.1, 1.25);
+      part(this.scene, GEO.cone, stdMat(0xfda4af, 0.15, 0.45), x, 4.5, RED_GATE_Z, 0.65, 0.8, 0.65);
+      for (const offset of [-0.26, 0, 0.26]) part(this.scene, GEO.box, red, x + offset, 4.15, RED_GATE_Z + 0.25, 0.13, 0.35, 0.18);
     }
+    part(this.scene, GEO.box, red, 0, 3.75, RED_GATE_Z, 6.7, 0.85, 0.75);
+    part(this.scene, GEO.box, stdMat(0xf43f5e, 0, 0.7, 0xff3b30, 0.4), 0, 0.025, RED_GATE_Z, LANE_W, 0.025, 0.24);
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.cachedText("LAWAN", "#fff"), depthTest: true }));
+    label.position.set(0, 3.9, RED_GATE_Z + 0.45);
+    label.scale.set(3.7, 1.4, 1);
+    this.scene.add(label);
   }
 
   private buildCannonBody() {
@@ -999,6 +1006,7 @@ export class Scene3D {
     this.syncParticles(f);
     this.syncFloats(f);
     this.syncShockwaves(f);
+    this.redGateMaterial.emissiveIntensity = 0.25 + f.gatePulse * 0.9;
 
     this.playerWallMat.color.set(f.hpRatio > 0.5 ? 0x22c55e : f.hpRatio > 0.25 ? 0xf59e0b : 0xef4444);
     this.playerWallMat.emissive.set(f.hpRatio > 0.5 ? 0x166534 : f.hpRatio > 0.25 ? 0xb45309 : 0x991b1b);
@@ -1158,50 +1166,21 @@ export class Scene3D {
   }
 
   private syncCrowd(f: RenderFrame) {
-    const ratio = f.bossMax > 0 ? Math.max(0, f.bossHp) / f.bossMax : 0;
-    const count = f.bossHp <= 0 ? 0 : Math.floor(70 + (MAX_CROWD - 70) * ratio);
-    // ── HORDE MENGIKUTI BOS yang berjalan (bukan diam di ujung) ──
-    const bossBp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
-    // Horde TIDAK boleh keluar dari aspal: lebar = lebar jalan dikurangi margin pagar.
-    const cols = 18;
-    const spanX = LANE_W - 1.1;
-    const depth = 6.5;
-    const rows = Math.max(1, Math.ceil(count / cols));
-    for (let i = 0; i < count; i++) {
-      const r = Math.floor(i / cols);
-      const c = i % cols;
-      const jitter = ((i * 13) % 10) / 10 - 0.5;
-      const x = THREE.MathUtils.clamp(-spanX / 2 + (c + 0.5) * (spanX / cols) + jitter * 0.18, -spanX / 2, spanX / 2);
-      const z = Math.max(LANE_END_Z + 0.6, bossBp.z - (1.2 + 2.2 * (f.champScale ?? 1)) - r * (depth / rows) - Math.abs(jitter) * 0.15);
-      const bob = Math.abs(Math.sin(f.time * (f.enraged ? 16 : 9) + i * 0.7)) * 0.04;
-      this.dummy.position.set(x, bob, z);
-      this.dummy.rotation.set(0.12, Math.PI + jitter * 0.4, Math.sin(f.time * 8 + i) * 0.08);
-      const s = 0.4 + (i % 5) * 0.025;
-      this.dummy.scale.setScalar(s);
-      this.dummy.updateMatrix();
-      this.crowdMesh.setMatrixAt(i, this.dummy.matrix);
-      this.crowdEyes.setMatrixAt(i, this.dummy.matrix);
-      this.crowdPupils.setMatrixAt(i, this.dummy.matrix);
-      this.color.setHex(f.enraged ? 0xff5a2a : 0xe11d48);
-      this.color.offsetHSL(0, 0, ((i % 7) - 3) * 0.012);
-      this.crowdMesh.setColorAt(i, this.color);
-    }
-    this.finishCrowd(this.crowdMesh, this.crowdEyes, this.crowdPupils, count);
-    this.crowdShadow.position.set(0, 0.015, bossBp.z - (2.4 + 2.2 * (f.champScale ?? 1)) - 1);
-    (this.crowdShadow.material as THREE.MeshBasicMaterial).opacity = 0.08 + ratio * 0.2;
-    this.enemyGlow.intensity = 2 + ratio * 5 + (f.enraged ? 3 : 0);
+    // No fake soldiers behind the boss: every visible opponent is in f.enemies and can be killed.
+    this.finishCrowd(this.crowdMesh, this.crowdEyes, this.crowdPupils, 0);
+    this.crowdShadow.visible = false;
+    this.enemyGlow.intensity = 2 + Math.min(4, f.enemies.length / 50);
   }
 
   /**
    * Ambil monster 3D: bila ada file .glb di public/assets/models gunakan itu (model asli),
    * bila tidak pakai rig prosedural ber-sendi (mulus, bukan hasil pikselisasi PNG).
    */
-  private requestModel(glbUrl: string | null, targetSize: number, fallback: () => MonsterRig, cb: (rig: MonsterRig) => void) {
-    if (!glbUrl) {
-      cb(fallback());
-      return;
-    }
-    void loadGlb(glbUrl).then((data) => cb(data ? wrapGlb(data, targetSize) : fallback()));
+  private requestModel(url: string, height: number, cb: (rig: MonsterRig | null) => void) {
+    void Promise.all([loadGlb(url), loadAnimationSettings()]).then(([data, configs]) => {
+      if (this.disposed) return;
+      cb(data ? wrapGlb(data, height, configs[modelKey(url)] ?? {}) : null);
+    }).catch((error) => console.warn("[GLB] Model cadangan tetap digunakan:", error));
   }
 
   /** Ambil rig bos dari cache (untuk dipakai bergantian) atau buat baru. */
@@ -1216,124 +1195,60 @@ export class Scene3D {
 
   private syncGiants(f: RenderFrame) {
     const giants = f.units.filter((u) => u.giant);
+    const request = (slot: (typeof this.giantSlots)[number], index: number) => {
+      const version = ++slot.request;
+      this.requestModel(MODEL_FILES.giant(index), GIANT_SIZE, (rig) => {
+        if (!rig) return;
+        if (this.disposed || slot.request !== version || slot.giantIndex !== index) { rig.dispose(); return; }
+        slot.rig.dispose();
+        slot.rig.group.removeFromParent();
+        slot.rig = rig;
+        slot.holder.add(rig.group);
+      });
+    };
     while (this.giantSlots.length < giants.length) {
-      const gu = giants[this.giantSlots.length];
-      const made = makeGiant(gu.emoji);
+      const index = giants[this.giantSlots.length].giantIndex ?? 0;
       const label = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
       label.renderOrder = 7;
-      this.scene.add(made.group, label);
-      this.giantSlots.push({
-        emoji: gu.emoji, giantIndex: gu.giantIndex ?? 0,
-        group: made.group, wings: made.wings, extras: made.extras, label,
-        rig: null, modelIdx: -1, holder: null,
-      });
-      const slot = this.giantSlots[this.giantSlots.length - 1];
-      slot.modelIdx = slot.giantIndex;
-      // monster pemain berdiri dalam wadah yang MENGHADAP -Z → jalannya selalu ke depan
       const holder = new THREE.Group();
-      holder.rotation.y = 0;
-      holder.visible = false;
-      this.scene.add(holder);
-      slot.holder = holder;
-      slot.rig = buildGiantRig(slot.giantIndex, GIANT_SIZE);
-      holder.add(slot.rig.group);
-      const glb = MODEL_FILES.giant(slot.giantIndex);
-      if (glb) {
-        this.requestModel(glb, GIANT_SIZE, () => buildGiantRig(slot.giantIndex, GIANT_SIZE), (rig: MonsterRig) => {
-          if (slot.modelIdx !== slot.giantIndex || !slot.holder) return;
-          if (slot.rig) {
-            slot.holder.remove(slot.rig.group);
-            slot.rig.dispose();
-          }
-          slot.rig = rig;
-          slot.holder.add(slot.rig.group);
-        });
-      }
+      const rig = buildGiantRig(index, GIANT_SIZE);
+      holder.add(rig.group);
+      const slot = { giantIndex: index, label, rig, holder, request: 0 };
+      this.giantSlots.push(slot);
+      this.scene.add(holder, label);
+      request(slot, index);
     }
     for (let i = 0; i < this.giantSlots.length; i++) {
       const slot = this.giantSlots[i];
       const u = giants[i];
-      const hasRig = !!slot.rig;
-      slot.group.visible = !!u && !hasRig;
-      slot.label.visible = !!u;
-      if (slot.holder) slot.holder.visible = !!u && hasRig;
+      slot.holder.visible = Boolean(u);
+      slot.label.visible = Boolean(u);
       if (!u) continue;
-      if (slot.emoji !== u.emoji || slot.giantIndex !== (u.giantIndex ?? 0)) {
-        // ganti model prosedural bila jenis monster berganti
-        this.scene.remove(slot.group);
-        const made = makeGiant(u.emoji);
-        this.scene.add(made.group);
-        slot.group = made.group;
-        slot.wings = made.wings;
-        slot.extras = made.extras;
-        slot.emoji = u.emoji;
-        const newIdx = u.giantIndex ?? 0;
-        if (newIdx !== slot.giantIndex) {
-          slot.giantIndex = newIdx;
-          if (slot.rig) {
-            slot.holder!.remove(slot.rig.group);
-            slot.rig.dispose();
-            slot.rig = null;
-          }
-          slot.modelIdx = newIdx;
-          slot.rig = buildGiantRig(newIdx, GIANT_SIZE);
-          slot.holder!.add(slot.rig.group);
-          const glb2 = MODEL_FILES.giant(newIdx);
-          if (glb2) {
-            this.requestModel(glb2, GIANT_SIZE, () => buildGiantRig(newIdx, GIANT_SIZE), (rig2: MonsterRig) => {
-              if (slot.modelIdx !== newIdx || !slot.holder) return;
-              if (slot.rig) {
-                slot.holder.remove(slot.rig.group);
-                slot.rig.dispose();
-              }
-              slot.rig = rig2;
-              slot.holder.add(slot.rig.group);
-            });
-          }
-        }
+      const index = u.giantIndex ?? 0;
+      if (slot.giantIndex !== index) {
+        slot.giantIndex = index;
+        slot.rig.dispose();
+        slot.rig.group.removeFromParent();
+        slot.rig = buildGiantRig(index, GIANT_SIZE);
+        slot.holder.add(slot.rig.group);
+        request(slot, index);
       }
       const p = worldOf(u.x, u.y);
-      // ── ANIMASI BERJALAN + HANTAMAN ──
-      const atk = Math.max(0, Math.min(1, (u.attackT ?? 0) / 0.65));
+      const atk = THREE.MathUtils.clamp(u.attackT / 0.65, 0, 1);
       const windup = atk > 0.5 ? (atk - 0.5) * 2 : 0;
-      const slam = atk > 0 && atk <= 0.5 ? 1 - atk * 2 : 0;
-      const punch = Math.sin(atk * Math.PI);
-      const step = Math.sin(f.time * 9 + u.seed * 7);
-      const bob = Math.abs(Math.sin(f.time * 6 + u.seed * 5)) * 0.08;
-      const crouch = windup * 0.22;
-      const lungeZ = slam * -0.7 + (u.lunge ?? 0) * punch * -0.25;
-      const walkSway = step * 0.07;
-      const walkBob = Math.abs(step) * 0.09;
-      if (slot.rig) {
-        // ── MONSTER 3D BER-SENDI: wadah hanya diposisikan, sendi dianimasikan rig ──
-        slot.holder!.position.set(p.x, Math.max(0, walkBob * 0.5 - crouch * 0.4), p.z + lungeZ);
-        slot.holder!.rotation.set(0, 0, walkSway * 0.12);
-        slot.rig.animate({
-          time: f.time,
-          walk: f.time * 8.5 + u.seed * 7,
-          stride: atk > 0 ? 0.35 : 1,
-          windup,
-          slam,
-          hit: f.hitFlash > 0 ? 1 : 0,
-          enraged: f.enraged,
-        });
-      } else {
-        slot.group.position.set(p.x, Math.max(0, bob + walkBob * 0.5 - crouch + slam * 0.1), p.z + lungeZ);
-        slot.group.rotation.y = Math.sin(f.time * 2 + u.seed) * 0.08 + walkSway * 0.3;
-        slot.group.rotation.x = windup * -0.18 + slam * 0.32;
-        slot.group.rotation.z = walkSway * 0.4;
-        const baseS = 1.65 * GIANT_SIZE;
-        slot.group.scale.set(baseS * (1 + slam * 0.18), baseS * (1 - windup * 0.12 - slam * 0.22), baseS * (1 + slam * 0.18));
-        for (const w of slot.wings) w.rotation.z = Math.sin(f.time * 7 + u.seed) * 0.45 * Math.sign(w.position.x || 1) + windup * 0.9;
-        for (const ex of slot.extras) ex.rotation.x = Math.sin(f.time * 5 + ex.position.x) * 0.3 - windup * 1.4 + slam * 1.8;
-      }
-      const text = `${Math.max(1, Math.round(u.power))}`;
+      const slam = atk > 0 && atk <= 0.5 ? Math.sin((1 - atk * 2) * Math.PI) : 0;
+      slot.holder.position.set(p.x, 0, p.z);
+      slot.holder.rotation.set(0, 0, 0); // normalized model faces -Z, toward enemies
+      slot.rig.animate({
+        time: f.time, walk: f.time * 8.5 + u.seed * 7,
+        stride: atk > 0 ? 0 : 1, windup, slam, hit: 0,
+        action: atk > 0 ? "attack" : "walk", actionId: u.attackId,
+        actionDuration: 0.65, entityId: u.seed,
+      });
       const mat = slot.label.material as THREE.SpriteMaterial;
-      mat.map = this.cachedText(text, "#fff");
-      mat.opacity = 1;
-      const giantTop = (hasRig && slot.rig ? slot.rig.height : 2.5 * GIANT_SIZE) + 0.8;
-      slot.label.position.set(p.x, giantTop - crouch, p.z);
-      slot.label.scale.set((1.5 + punch * 0.3) * 1.3, (0.75 + punch * 0.15) * 1.3, 1);
+      mat.map = this.cachedText(`${Math.max(1, Math.round(u.power))}`, "#fff");
+      slot.label.position.set(p.x, slot.rig.height + 0.8, p.z);
+      slot.label.scale.set(1.95, 0.98, 1);
     }
   }
 
@@ -1391,7 +1306,7 @@ export class Scene3D {
 
   private syncBoss(f: RenderFrame) {
     const idx = THREE.MathUtils.clamp(f.bossIndex, 0, this.bosses.length - 1);
-    const alive = f.bossHp > 0 || f.phase === "clear";
+    const alive = f.bossHp > 0;
     // ── POSISI BERJALAN: bos tidak lagi di panggung, melainkan di jalur ──
     const bp = worldOf(f.bossX ?? 0.5, THREE.MathUtils.clamp(f.bossY ?? 1, 0.05, 1.1));
     // ── monster 3D (rig ber-sendi, atau file .glb bila pemain menyediakannya) ──
@@ -1415,8 +1330,10 @@ export class Scene3D {
       holder.add(this.bossModel.group);
       const glb = MODEL_FILES.boss(idx);
       if (glb) {
-        this.requestModel(glb, bossBaseSize, () => this.makeBossRig(idx, bossBaseSize), (rig: MonsterRig) => {
-          if (this.bossModelIdx !== idx || !this.bossHolder) return;
+        const request = ++this.modelRequest;
+        this.requestModel(glb, bossBaseSize, (rig) => {
+          if (!rig) return;
+          if (this.disposed || request !== this.modelRequest || this.bossModelIdx !== idx || this.bossHolder !== holder) { rig.dispose(); return; }
           if (this.bossModel) {
             this.bossHolder.remove(this.bossModel.group);
             this.bossModel.dispose();
@@ -1461,6 +1378,10 @@ export class Scene3D {
       this.bossHolder.position.set(bp.x + roarShake, Math.max(0, walkBob * 0.55 + idleBob - crouch * 0.35), bp.z + lungeZ * 0.5);
       this.bossHolder.rotation.set(0, Math.PI, stepL * 0.04);
       this.bossModel.animate({
+        action: f.bossAction,
+        actionId: f.bossActionId,
+        actionDuration: f.bossAction === "attack" ? 1.5 : 0.9,
+        entityId: f.bossEntityId,
         time: f.time,
         walk,
         stride: atk > 0 ? 0.25 : 1,
@@ -1649,6 +1570,9 @@ export class Scene3D {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.modelRequest++;
     if (this.scenery) {
       this.scene.remove(this.scenery.group);
       this.scenery.dispose();
@@ -1664,11 +1588,11 @@ export class Scene3D {
       this.bossHolder = null;
     }
     for (const slot of this.giantSlots) {
-      if (slot.rig) {
-        this.scene.remove(slot.rig.group);
-        slot.rig.dispose();
-        slot.rig = null;
-      }
+      slot.request++;
+      slot.rig.dispose();
+      slot.holder.removeFromParent();
+      slot.label.removeFromParent();
+      (slot.label.material as THREE.Material).dispose();
     }
     this.renderer.dispose();
     this.renderer.forceContextLoss();

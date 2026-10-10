@@ -15,6 +15,7 @@ import {
 import { gateExpression, generateQuestion, type Question } from "./math";
 import { play } from "../audio";
 import { Scene3D } from "./scene3d";
+import { ENEMY_ENTRY_Y, PLAYABLE_MAX_Y, FORMATION_COLUMNS, ENTRY_ROW_INTERVAL, planFormation, type FormationMember } from "./battlefield";
 
 export type RewardType = "weapon" | "multiply" | "monster" | "heal";
 export interface Reward {
@@ -114,6 +115,7 @@ interface PUnit {
   emoji: string;
   giantIndex: number;
   maxPower: number;
+  attackId?: number;
   // ── combat ──
   attackT: number; // sisa waktu animasi serang (detik), >0 = sedang menghantam
   attackCd: number; // jeda antar serangan
@@ -178,6 +180,8 @@ interface Deco {
   s: number;
 }
 interface BossState {
+  id: number;
+  actionId: number;
   def: BossDef;
   index: number;
   tier: number;
@@ -240,6 +244,12 @@ export class GameEngine {
   private clearTimer = 0;
   private units: PUnit[] = [];
   private enemies: EUnit[] = [];
+  private enemyRows: FormationMember[][] = [];
+  private gateTimerRow = 0;
+  private gatePulse = 0;
+  private entitySerial = 0;
+  private actionSerial = 0;
+  private animationTime = 0;
   private gates: Gate[] = [];
   private particles: Particle[] = [];
   private floats: FloatText[] = [];
@@ -380,11 +390,14 @@ export class GameEngine {
     this.champTime = 0;
     this.units = [];
     this.enemies = [];
+    this.enemyRows = [];
+    this.gateTimerRow = 0;
+    this.gatePulse = 0;
     this.particles = [];
     this.floats = [];
     this.shockwaves = [];
     this.levelTime = 0;
-    this.spawnTimer = 2.5;
+    this.spawnTimer = 0.15;
     this.headsFired = 0;
     this.frostTimer = 9;
     this.frostActive = 0;
@@ -566,13 +579,9 @@ export class GameEngine {
   }
 
   private punish() {
-    const L = this.level;
-    const g = Math.max(1, Math.round(this.gp() * 0.7));
-    const size = BALANCE.waveSize(L) * 2;
-    const cx = rnd(0.2, 0.8);
-    for (let i = 0; i < size; i++) this.spawnEnemy(cx + rnd(-0.25, 0.25), 1 + rnd(0, 0.15), 0, g);
-    this.spawnEnemy(cx, 1.05, 2, g * 4);
-    this.addFloat(0.5, 0.8, "GELOMBANG HUKUMAN!", "#f87171", 22);
+    // Reinforcements always enter through the same gate, never appear in the player's lane.
+    if (this.stageMode !== "mopup") this.spawnWave(2);
+    this.addFloat(0.5, ENEMY_ENTRY_Y, "GELOMBANG HUKUMAN!", "#f87171", 22);
   }
 
   // ── spawning ─────────────────────────────────────────────────
@@ -626,39 +635,53 @@ export class GameEngine {
     this.shockwaves.push({ x, y, r: 0.03, maxR, life: 0.55, maxLife: 0.55, color });
   }
 
-  private spawnWave(mult = 1, yBase?: number) {
+  private spawnWave(mult = 1) {
+    if (this.stageMode === "mopup") return;
     const L = this.level;
     const sp = this.boss.def.specials;
-    // jumlah prajurit mengikuti ANGGARAN kekuatan: di awal (senjata lemah) sedikit,
-    // makin kuat pemain → jalan makin penuh. Kekuatan minimum prajurit = 1.
     const ref = BALANCE.refRaw(L, this.weaponLevel);
-    const fill = Math.min(1, BALANCE.waveBudget(L, ref) / (BALANCE.waveSize(L) * this.gp()));
-    const size = Math.max(1, Math.round(BALANCE.waveSize(L) * mult * fill * (this.boss.enraged ? 1.5 : 1)));
-    // pasukan musuh keluar dari posisi bos (ikut maju), bukan dari langit-langit
-    // pengawal muncul di depan kaki monster (badan monster kini sangat besar)
-    const originY = yBase ?? Math.min(1.04, Math.max(0.14, this.boss.y - (0.03 + 0.07 * this.boss.scale)));
-    const cx = this.boss.hp > 0 ? Math.min(0.85, Math.max(0.15, this.boss.x + rnd(-0.2, 0.2))) : rnd(0.15, 0.85);
-    const runnerChance = sp.includes("rush") ? 0.4 : 0.12;
-    const bruteChance = sp.includes("elite") ? 0.22 : 0.09;
-    const eliteChance = L >= 6 ? (sp.includes("elite") ? 0.08 : 0.03) : 0;
-    // normalise so the average power per spawn equals BALANCE.gruntPower regardless of composition
-    const comp = runnerChance * 0.5 + bruteChance * 4 + eliteChance * 12 + (1 - runnerChance - bruteChance - eliteChance);
-    const g = Math.max(1, this.gp() / comp);
-    for (let i = 0; i < size; i++) {
-      const r = Math.random();
-      const x = cx + rnd(-0.22, 0.22);
-      const y = originY + rnd(0, 0.06);
-      if (r < eliteChance) this.spawnEnemy(x, y, 3, Math.round(g * 12));
-      else if (r < eliteChance + bruteChance) this.spawnEnemy(x, y, 2, Math.round(g * 4));
-      else if (r < eliteChance + bruteChance + runnerChance) this.spawnEnemy(x, y, 1, Math.max(1, Math.round(g * 0.5)));
-      else this.spawnEnemy(x, y, 0, Math.max(1, Math.round(g)));
+    const gp = this.gp();
+    const fill = Math.min(1, BALANCE.waveBudget(L, ref) / (BALANCE.waveSize(L) * gp));
+    const oldCount = Math.max(1, Math.round(BALANCE.waveSize(L) * mult * fill * (this.boss.hp > 0 && this.boss.enraged ? 1.5 : 1)));
+    // More bodies, not more HP: divide the previous wave budget over complete rows.
+    const members = planFormation(oldCount * gp, Math.max(FORMATION_COLUMNS, oldCount * 1.3), {
+      rush: sp.includes("rush"), elite: sp.includes("elite"), allowElite: L >= 6,
+    });
+    for (let i = 0; i < members.length; i += FORMATION_COLUMNS) {
+      const row = members.slice(i, i + FORMATION_COLUMNS);
+      if (this.enemyRows.length < 128) this.enemyRows.push(row);
+      else {
+        // Bounded queue. Extra strength stays at the gate, never teleports to a front-line soldier.
+        const last = this.enemyRows[this.enemyRows.length - 1];
+        row.forEach((member, index) => { last[index % last.length].power += member.power; });
+      }
     }
+  }
+
+  private pendingEnemyCount() {
+    return this.enemyRows.reduce((count, row) => count + row.length, 0);
+  }
+
+  private updateEnemyEntrance(wdt: number) {
+    this.gatePulse = Math.max(0, this.gatePulse - wdt * 2);
+    this.gateTimerRow -= wdt;
+    if (this.gateTimerRow > 0 || this.enemyRows.length === 0) return;
+    const room = BALANCE.maxEnemyUnits - this.enemies.length;
+    if (room <= 0) { this.gateTimerRow = 0; return; }
+    const row = this.enemyRows[0];
+    const release = Math.min(room, row.length);
+    const members = row.splice(0, release);
+    for (const member of members) this.spawnEnemy(member.x, ENEMY_ENTRY_Y, member.type, member.power);
+    if (row.length === 0) this.enemyRows.shift();
+    this.gateTimerRow = ENTRY_ROW_INTERVAL;
+    this.gatePulse = 1;
   }
 
   // ── update ───────────────────────────────────────────────────
   private update(dt: number) {
     if (this.paused) return;
     this.elapsed += dt;
+    this.animationTime += this.phase === "play" ? dt * this.timeScale : dt;
     this.hudTimer -= dt;
     if (this.toastTimer > 0) {
       this.toastTimer -= dt;
@@ -689,6 +712,7 @@ export class GameEngine {
       this.cannonX += (this.targetX - this.cannonX) * Math.min(1, dt * 14);
       this.updateFire(wdt);
       this.updateSpawns(wdt);
+      this.updateEnemyEntrance(wdt);
       this.updateSpecials(wdt);
       this.updateStage(wdt);
       this.updateUnits(wdt);
@@ -737,18 +761,13 @@ export class GameEngine {
       const grace = L === 1 ? 1.6 : L === 2 ? 1.35 : L === 3 ? 1.15 : 1; // masa belajar level awal
       const duel = this.stageMode === "champion" ? 1.35 : 1; // saat bos ada, pasukan juga keluar dari belakangnya
       this.spawnTimer = (BALANCE.spawnInterval(L) / this.boss.def.spawnMult) * pressure * grace * duel * rnd(0.85, 1.15);
-      if (this.stageMode === "champion" && this.boss.hp > 0) {
-        this.spawnWave(0.6); // barisan depan kaki bos
-        this.spawnWave(0.45, Math.min(1.12, this.boss.y + 0.05)); // pasukan berbaris DI BELAKANG bos
-      } else {
-        this.spawnWave(1, 1.02); // gelombang pasukan memenuhi jalan
-      }
+      this.spawnWave(this.stageMode === "champion" ? 1.05 : 1);
     }
   }
 
   private updateSpecials(wdt: number) {
-    const sp = this.boss.def.specials;
-    if (sp.includes("frost") || this.boss.tier >= 3) {
+    const sp = this.stageMode === "champion" && this.boss.hp > 0 ? this.boss.def.specials : [];
+    if (this.stageMode === "champion" && (sp.includes("frost") || this.boss.tier >= 3)) {
       if (this.frostActive > 0) {
         this.frostActive -= wdt;
       } else {
@@ -760,13 +779,13 @@ export class GameEngine {
         }
       }
     }
-    if (sp.includes("ambush") || this.boss.tier >= 4) {
+    if (this.stageMode === "champion" && (sp.includes("ambush") || this.boss.tier >= 4)) {
       this.ambushTimer -= wdt;
       if (this.ambushTimer <= 0) {
         this.ambushTimer = 9;
-        this.spawnWave(0.8, 0.5);
-        this.addFloat(0.5, 0.56, "⚠️ SERANGAN KEJUTAN!", "#fde68a", 20);
-        this.burst(0.5, 0.52, "#a855f7", 20);
+        this.spawnWave(0.8);
+        this.addFloat(0.5, ENEMY_ENTRY_Y, "⚠️ BALA BANTUAN!", "#fde68a", 20);
+        this.burst(0.5, ENEMY_ENTRY_Y, "#a855f7", 20);
       }
     }
     if (this.boss.hitFlash > 0) this.boss.hitFlash -= wdt;
@@ -836,6 +855,7 @@ export class GameEngine {
         this.spawnShockwave(b.x, 0.1, b.def.color, 0.26);
         b.attackT = Math.max(b.attackT, 0.5);
         b.attackKind = "stomp";
+        b.actionId = ++this.actionSerial;
         play("slam");
         if (this.hp <= 0) {
           this.hp = 0;
@@ -907,6 +927,7 @@ export class GameEngine {
       if (b.attackCd <= 0) {
         // mulai telegraf: bos meraung, tanda seru, lalu hantam 0.8 dtk kemudian
         b.warnT = 0.8;
+        b.actionId = ++this.actionSerial;
         b.attackKind = "roar";
         b.attackT = 0.8;
         this.addFloat(b.x, Math.min(1, b.y + 0.1), "❗", "#fbbf24", 30);
@@ -921,8 +942,7 @@ export class GameEngine {
     if (this.phase !== "play") return;
     for (const u of this.units) {
       if (!u.giant) continue;
-      if (u.slamCd > 0) u.slamCd -= wdt;
-      if (u.attackT > 0) u.attackT -= wdt * 1.4;
+      if (u.slamCd > 0) u.slamCd -= wdt; // attackT is decremented ONLY in updateUnits
       if (u.slamCd > 0) continue;
       // cari musuh dalam radius hantaman
       const R = 0.16;
@@ -937,6 +957,7 @@ export class GameEngine {
       if (victim.length >= 2) {
         // SLAM!
         u.attackT = 0.65;
+        u.attackId = ++this.actionSerial;
         u.slamCd = 1.1;
         u.lunge = 1;
         const slamDmg = Math.max(2, Math.round(u.power * 0.35));
@@ -1010,7 +1031,7 @@ export class GameEngine {
         this.damageBoss(u.power, u.x);
         units[i] = units[units.length - 1];
         units.pop();
-      } else if (u.y >= 1.06) {
+      } else if (u.y >= PLAYABLE_MAX_Y) {
         // pengaman: unit yang lolos dari bos tetap merusak bos
         this.damageBoss(u.power, u.x);
         units[i] = units[units.length - 1];
@@ -1030,11 +1051,12 @@ export class GameEngine {
       const em = this.edgeMargin(e.r);
       e.x = clamp(e.x, em, 1 - em); // tak pernah keluar dari jalan
       if (e.y <= 0) {
-        const dmg = Math.min(Math.round(this.maxHp * 0.5), Math.max(1, Math.round((e.power / this.gp()) * (0.9 + Math.min(40, this.level) * 0.05))));
+        // Preserve total wave threat when its HP budget is split across more visible bodies.
+        const dmg = Math.min(this.maxHp * 0.5, Math.max(0.01, (e.power / this.gp()) * (0.9 + Math.min(40, this.level) * 0.05)));
         this.hp -= dmg;
         this.dmgFlash = 1;
         this.shake = 0.35;
-        this.addFloat(e.x, 0.04, `-${dmg}`, "#f87171", 18);
+        this.addFloat(e.x, 0.04, `-${dmg < 1 ? dmg.toFixed(1) : Math.round(dmg)}`, "#f87171", 18);
         this.burst(e.x, 0.01, "#ef4444", 8);
         play("hit");
         en[i] = en[en.length - 1];
@@ -1088,6 +1110,7 @@ export class GameEngine {
     if (!b.enraged && ratio < 0.4) {
       b.enraged = true;
       b.attackT = 0.9;
+      b.actionId = ++this.actionSerial;
       b.attackKind = "roar";
       this.addFloat(b.x, Math.min(1, b.y + 0.1), `${b.def.emoji} BOS MENGAMUK!`, "#fca5a5", 26);
       this.spawnShockwave(b.x, Math.max(0.08, b.y - 0.03), "#ef4444", 0.3);
@@ -1114,7 +1137,7 @@ export class GameEngine {
     const rows = this.gridRows;
     for (const cell of this.grid) cell.length = 0;
     const cellW = 1 / cols;
-    const cellH = 1.2 / rows;
+    const cellH = PLAYABLE_MAX_Y / rows;
     for (const e of this.enemies) {
       const cx = clamp(Math.floor(e.x / cellW), 0, cols - 1);
       const cy = clamp(Math.floor(e.y / cellH), 0, rows - 1);
@@ -1145,6 +1168,7 @@ export class GameEngine {
               // ── PERKELAHIAN: kedua pihak menghantam ──
               if (u.attackCd <= 0) {
                 u.attackT = u.giant ? 0.5 : 0.32;
+                u.attackId = ++this.actionSerial;
                 u.attackCd = u.giant ? 0.5 : 0.42;
                 u.lunge = 1;
               }
@@ -1276,6 +1300,8 @@ export class GameEngine {
     // bos berjalan pelan: butuh ±2,8× lama duel untuk sampai benteng → ada waktu berjuang
     const baseSpeed = 0.9 / (BALANCE.fightSeconds(L, k, this.stageTotal) * 2.8);
     return {
+      id: ++this.entitySerial,
+      actionId: ++this.actionSerial,
       def: BOSSES[visIdx],
       index: visIdx,
       tier,
@@ -1378,13 +1404,13 @@ export class GameEngine {
       this.units.pop();
     }
     b.attackT = 0.9;
+    b.actionId = ++this.actionSerial;
     b.attackKind = "roar";
     this.spawnShockwave(0.5, 0.95, b.def.color, 0.5);
     this.shake = Math.max(this.shake, 0.5);
     if (swept > 0) this.addFloat(0.5, 0.86, `🔊 RAUNGAN! -${swept} pasukan`, "#fca5a5", 20);
     // pasukan pengiring berbaris di belakang bos (beberapa lapis)
-    const rows = b.isBoss ? 4 : 3;
-    for (let r = 0; r < rows; r++) this.spawnWave(b.isBoss ? 0.9 : 0.7, Math.min(1.16, b.y + 0.04 + r * 0.035));
+    this.spawnWave(b.isBoss ? 3.6 : 2.1); // full-width escorts leave the far red gate
   }
 
   private updateStage(wdt: number) {
@@ -1394,8 +1420,8 @@ export class GameEngine {
       if (this.waveTimer <= 0) this.enterChampion();
     } else if (this.stageMode === "mopup") {
       this.mopTimer += wdt;
-      // selesai bila semua pasukan habis (pengaman: maks 60 detik)
-      if (this.enemies.length === 0 || this.mopTimer > 60) this.levelClear();
+      // Pending gate rows count as enemies too. No timer may silently delete surviving soldiers.
+      if (this.enemies.length === 0 && this.pendingEnemyCount() === 0) this.levelClear();
     }
   }
 
@@ -1501,7 +1527,7 @@ export class GameEngine {
           isBoss: this.boss.isBoss && this.stageMode === "champion",
           incoming: this.stageMode === "wave" ? Math.max(0, this.waveTimer) : 0,
           mode: this.stageMode,
-          enemiesLeft: this.enemies.length,
+          enemiesLeft: this.enemies.length + this.pendingEnemyCount(),
           bossName: fb.name,
           bossTitle: fb.title,
           bossEmoji: fb.emoji,
@@ -1518,7 +1544,7 @@ export class GameEngine {
     if (!this.view || !this.map || !this.boss) return;
     const w = getWeapon(this.weaponLevel);
     this.view.render({
-      time: this.elapsed,
+      time: this.animationTime,
       shake: this.shake,
       frost: this.frostActive,
       flash: this.flash,
@@ -1542,6 +1568,10 @@ export class GameEngine {
       enraged: this.boss.enraged,
       hitFlash: this.boss.hitFlash,
       bossAttackT: this.boss.attackT,
+      bossEntityId: this.boss.id,
+      bossActionId: this.boss.actionId,
+      bossAction: this.boss.hp <= 0 ? "death" : this.boss.warnT > 0 || (this.boss.attackT > 0 && this.boss.attackKind !== "roar") ? "attack" : this.boss.attackT > 0 ? "roar" : "walk",
+      gatePulse: this.gatePulse,
       bossAttackKind: this.boss.attackKind,
       bossWarn: this.boss.warnT,
       bossX: this.boss.x,

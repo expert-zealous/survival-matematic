@@ -1,5 +1,22 @@
+# Netlify — hosting statis untuk Survival Matematic
 [build]
-  command = "npm run build"
+  command = "node scripts/static-build.mjs"
+  publish = "out"
 
-[[plugins]]
-  package = "@netlify/plugin-nextjs"
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # Situs ini diekspor statis; jangan pasang runtime server Next.js otomatis.
+  NETLIFY_NEXT_PLUGIN_SKIP = "true"
+
+# Service worker harus selalu dicek ulang agar update game cepat sampai ke pemain
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+# File hasil build Next.js bernama-hash → aman di-cache lama
+[[headers]]
+  for = "/_next/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

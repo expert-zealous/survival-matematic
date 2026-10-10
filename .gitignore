@@ -17,3 +17,8 @@ Thumbs.db
 npm-debug.log*
 .netlify/
 .vercel/
+
+# output pengujian lokal
+.tmp-test/
+playwright-report/
+test-results/
